@@ -1,12 +1,13 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, use } from 'react'
 
 const STAFF_PIN = '1234' // In production: fetch from DB by slug
 
 type OrderItem = { id: string; name: string; price: number; emoji: string; guest: string }
 type Order = { id: number; table: string; time: string; items: OrderItem[]; done: boolean }
 
-export default function StaffPage({ params }: { params: { slug: string } }) {
+export default function StaffPage({ params: paramsPromise }: { params: Promise<{ slug: string }> }) {
+  const params = use(paramsPromise)
   const ORDERS_KEY = `rstgo_${params.slug}_orders`
   const [pinInput, setPinInput] = useState('')
   const [authenticated, setAuthenticated] = useState(false)

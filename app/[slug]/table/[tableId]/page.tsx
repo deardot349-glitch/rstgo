@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, use } from 'react'
 
 const MENU = [
   { cat: 'Салати', emoji: '🥗', items: [
@@ -50,7 +50,8 @@ type CartItem = { id: string; name: string; price: number; emoji: string }
 type GuestData = { cart: CartItem[] }
 type TableState = { guests: Record<string, GuestData> }
 
-export default function CustomerPage({ params }: { params: { slug: string; tableId: string } }) {
+export default function CustomerPage({ params: paramsPromise }: { params: Promise<{ slug: string; tableId: string }> }) {
+  const params = use(paramsPromise)
   const tableId = params.tableId
   const STORAGE_KEY = `rstgo_${params.slug}_table_${tableId}`
   const WAITER_KEY = `rstgo_${params.slug}_waiter_${tableId}`
