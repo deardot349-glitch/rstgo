@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 
 const TABLE_COUNT = 10
 const SLUG = 'vatra-restaurant'
@@ -9,9 +9,14 @@ export default function TablesPage() {
   const [tableCount, setTableCount] = useState(TABLE_COUNT)
   const [editingCount, setEditingCount] = useState(false)
   const [tempCount, setTempCount] = useState(String(TABLE_COUNT))
+  const [baseUrl, setBaseUrl] = useState('')
 
-  const tableUrl = (n: number) => `https://rstgo.app/${SLUG}/table/${n}`
-  const staffUrl = `https://rstgo.app/${SLUG}/staff`
+  useEffect(() => {
+    setBaseUrl(window.location.origin)
+  }, [])
+
+  const tableUrl = (n: number) => `${baseUrl}/${SLUG}/table/${n}`
+  const staffUrl = `${baseUrl}/${SLUG}/staff`
 
   const copyUrl = async (url: string, tableNum: number) => {
     await navigator.clipboard.writeText(url)
@@ -27,7 +32,6 @@ export default function TablesPage() {
 
   return (
     <div className="px-6 py-8 max-w-5xl mx-auto">
-      {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <div>
           <h1 className="font-display text-3xl font-bold mb-1">Столи</h1>
@@ -39,12 +43,11 @@ export default function TablesPage() {
         </button>
       </div>
 
-      {/* Staff link */}
       <div className="bg-[#1C1A18] rounded-2xl p-5 mb-6 flex items-center gap-4">
         <div className="w-10 h-10 bg-[#C17F3B] rounded-xl flex items-center justify-center text-white font-bold shrink-0">👨‍🍳</div>
         <div className="flex-1 min-w-0">
           <div className="text-white font-semibold text-sm mb-0.5">Панель персоналу</div>
-          <div className="text-white/50 text-xs font-mono truncate">{staffUrl}</div>
+          <div className="text-white/50 text-xs font-mono truncate">{staffUrl || 'завантаження...'}</div>
           <div className="text-white/40 text-xs mt-1">Захищено PIN-кодом · Видно тільки персоналу</div>
         </div>
         <button onClick={() => navigator.clipboard.writeText(staffUrl)}
@@ -53,7 +56,6 @@ export default function TablesPage() {
         </button>
       </div>
 
-      {/* Table count control */}
       <div className="bg-white border border-[#E8E0D4] rounded-2xl p-5 mb-6 flex items-center gap-4">
         <div className="flex-1">
           <div className="font-semibold text-sm mb-0.5">Кількість столів</div>
@@ -78,7 +80,6 @@ export default function TablesPage() {
         )}
       </div>
 
-      {/* NFC Instructions */}
       <div className="bg-[#F5E9D8] border border-[#E8C99A] rounded-2xl p-5 mb-6">
         <div className="font-semibold text-[#9A6328] mb-2">📲 Як налаштувати NFC-теги</div>
         <ol className="text-sm text-[#7A5520] space-y-1 list-decimal list-inside">
@@ -90,7 +91,6 @@ export default function TablesPage() {
         </ol>
       </div>
 
-      {/* Tables grid */}
       <div className="grid sm:grid-cols-2 gap-3">
         {Array.from({ length: tableCount }, (_, i) => i + 1).map(n => {
           const url = tableUrl(n)
@@ -105,18 +105,17 @@ export default function TablesPage() {
                 </div>
                 <div className="flex gap-1.5">
                   <a href={url} target="_blank" rel="noreferrer"
-                    className="w-8 h-8 rounded-lg bg-[#FAF8F5] hover:bg-[#F0E8DC] flex items-center justify-center text-sm transition-colors" title="Відкрити">
+                    className="w-8 h-8 rounded-lg bg-[#FAF8F5] hover:bg-[#F0E8DC] flex items-center justify-center text-sm transition-colors">
                     👁
                   </a>
                   <button onClick={() => copyUrl(url, n)}
-                    className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm transition-all ${isCopied ? 'bg-[#3A7D58] text-white' : 'bg-[#FAF8F5] hover:bg-[#F0E8DC]'}`}
-                    title="Копіювати">
+                    className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm transition-all ${isCopied ? 'bg-[#3A7D58] text-white' : 'bg-[#FAF8F5] hover:bg-[#F0E8DC]'}`}>
                     {isCopied ? '✓' : '📋'}
                   </button>
                 </div>
               </div>
               <div className="bg-[#FAF8F5] rounded-xl px-3 py-2">
-                <div className="text-xs font-mono text-[#9A9490] truncate">{url}</div>
+                <div className="text-xs font-mono text-[#9A9490] truncate">{url || 'завантаження...'}</div>
               </div>
             </div>
           )
