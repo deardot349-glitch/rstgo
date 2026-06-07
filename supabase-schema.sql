@@ -110,6 +110,53 @@ create policy "Public can create waiter calls" on waiter_calls
 create policy "Owner can manage waiter calls" on waiter_calls
   for all using (restaurant_id in (select id from restaurants where owner_id = auth.uid()));
 
--- Enable realtime for orders and waiter_calls
+-- Live table sessions (shared cart per table across devices)
+create table table_sessions (
+  id uuid primary key default gen_random_uuid(),
+  restaurant_slug text not null,
+  table_number int not null,
+  guest_name text not null,
+  cart jsonb not null default '[]',
+  updated_at timestamptz default now(),
+  unique(restaurant_slug, table_number, guest_name)
+);
+
+alter table table_sessions enable row level security;
+create policy "Public can read sessions" on table_sessions for select using (true);
+create policy "Public can insert sessions" on table_sessions for insert with check (true);
+create policy "Public can update sessions" on table_sessions for update using (true);
+create policy "Public can delete sessions" on table_sessions for delete using (true);
+
+-- Waiter calls table (shared across devices)
+create table if not exists waiter_calls_rt (
+  id uuid primary key default gen_random_uuid(),
+  restaurant_slug text not null,
+  table_number int not null,
+  guest_name text not null,
+  created_at timestamptz default now(),
+  resolved boolean default false
+);
+
+alter table waiter_calls_rt enable row level security;
+create policy "Public full access waiter_calls_rt" on waiter_calls_rt for all using (true);
+
+-- Orders realtime table
+create table if not exists orders_rt (
+  id uuid primary key default gen_random_uuid(),
+  restaurant_slug text not null,
+  table_number int not null,
+  items jsonb not null default '[]',
+  total numeric default 0,
+  done boolean default false,
+  created_at timestamptz default now()
+);
+
+alter table orders_rt enable row level security;
+create policy "Public full access orders_rt" on orders_rt for all using (true);
+
+-- Enable realtime for all live tables
 alter publication supabase_realtime add table orders;
 alter publication supabase_realtime add table waiter_calls;
+alter publication supabase_realtime add table table_sessions;
+alter publication supabase_realtime add table orders_rt;
+alter publication supabase_realtime add table waiter_calls_rt;
