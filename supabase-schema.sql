@@ -14,6 +14,7 @@ create table restaurants (
   staff_pin text not null,
   plan text default 'starter' check (plan in ('starter','pro','enterprise')),
   active boolean default true,
+  blocked boolean default false,
   primary_color text default '#C17F3B',
   address text,
   phone text,
@@ -82,9 +83,9 @@ create policy "Owner can manage categories" on menu_categories
 create policy "Owner can manage items" on menu_items
   for all using (restaurant_id in (select id from restaurants where owner_id = auth.uid()));
 
--- Public can read active restaurants (for customer ordering)
+-- Public can read active, non-blocked restaurants (for customer ordering)
 create policy "Public can read restaurants" on restaurants
-  for select using (active = true);
+  for select using (active = true and blocked = false);
 
 create policy "Public can read categories" on menu_categories
   for select using (true);
@@ -153,6 +154,17 @@ create table if not exists orders_rt (
 
 alter table orders_rt enable row level security;
 create policy "Public full access orders_rt" on orders_rt for all using (true);
+
+-- Admin users table (platform-level admins, separate from restaurant owners)
+create table if not exists admin_users (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users(id) on delete cascade unique,
+  created_at timestamptz default now()
+);
+
+alter table admin_users enable row level security;
+-- Only admins can read admin_users (checked via service role in production)
+create policy "Admins only" on admin_users for select using (user_id = auth.uid());
 
 -- Enable realtime for all live tables
 alter publication supabase_realtime add table orders;

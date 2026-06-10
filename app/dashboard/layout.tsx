@@ -47,6 +47,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-white/60 hover:text-white hover:bg-white/8 transition-colors">
             <span>👨‍🍳</span> Панель персоналу
           </Link>
+          <Link href="/onboarding"
+            className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-white/60 hover:text-white hover:bg-white/8 transition-colors">
+            <span>📲</span> NFC Налаштування
+          </Link>
+          <Link href="/admin"
+            className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-red-400/70 hover:text-red-300 hover:bg-red-900/15 transition-colors">
+            <span>🛡</span> Адмін-панель
+          </Link>
           <button className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-white/40 hover:text-white hover:bg-white/8 transition-colors">
             <span>🚪</span> Вийти
           </button>
@@ -59,6 +67,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <div className="w-7 h-7 bg-[#C17F3B] rounded-lg flex items-center justify-center font-bold text-xs">R</div>
           <span className="font-display font-bold">RSTGO</span>
         </div>
+        <Link href="/admin" className="text-red-400/70 text-xs font-medium">🛡 Адмін</Link>
       </div>
 
       {/* Mobile bottom nav */}

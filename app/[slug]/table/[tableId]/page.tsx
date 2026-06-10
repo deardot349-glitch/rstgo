@@ -49,6 +49,7 @@ function ini(n: string) { return n.trim().charAt(0).toUpperCase() }
 
 type CartItem = { id: string; name: string; price: number; emoji: string }
 type GuestSession = { guest_name: string; cart: CartItem[] }
+type OrderRecord = { items: Array<CartItem & { guest: string }>; total: number; submittedAt: string }
 
 export default function CustomerPage({ params: paramsPromise }: { params: Promise<{ slug: string; tableId: string }> }) {
   const { slug, tableId } = use(paramsPromise)
@@ -64,6 +65,11 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
   const [showRemoveModal, setShowRemoveModal] = useState<string|null>(null)
   const [showLeaveModal, setShowLeaveModal] = useState(false)
   const [saving, setSaving] = useState(false)
+  // Keep track of the last submitted order so the bill doesn't disappear
+  const [lastOrder, setLastOrder] = useState<OrderRecord | null>(null)
+  // Tooltip for locked buttons
+  const [showCartTooltip, setShowCartTooltip] = useState(false)
+  const [showWaiterTooltip, setShowWaiterTooltip] = useState(false)
 
   useEffect(() => {
     const fetchSessions = async () => {
@@ -91,6 +97,11 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
   const myCart: CartItem[] = sessions.find(s => s.guest_name === currentUser)?.cart || []
   const getQty = (id: string) => myCart.filter(i => i.id === id).length
   const totalCount = () => sessions.reduce((s, g) => s + (g.cart?.length || 0), 0)
+  const myCartCount = myCart.length
+
+  // Cart and waiter button are only accessible if the user has added items
+  const cartAccessible = myCartCount > 0
+  const waiterAccessible = myCartCount > 0
 
   const saveCart = async (cart: CartItem[]) => {
     setSaving(true)
@@ -159,8 +170,18 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
   const submitOrder = async () => {
     const activeGuests = sessions.filter(s => s.cart.length > 0)
     if (!activeGuests.length) return
+
     const allItems = activeGuests.flatMap(s => s.cart.map(item => ({ ...item, guest: s.guest_name })))
     const total = allItems.reduce((s, i) => s + i.price, 0)
+
+    // Save order record BEFORE clearing carts so success screen can show it
+    const orderRecord: OrderRecord = {
+      items: allItems,
+      total,
+      submittedAt: new Date().toISOString(),
+    }
+    setLastOrder(orderRecord)
+
     await supabase.from('orders_rt').insert({
       restaurant_slug: slug, table_number: tableNum, items: allItems, total, done: false,
     })
@@ -252,16 +273,67 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
               </div>
             ))}
           </div>
-          {totalCount() > 0 && (
-            <div className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t border-[#E8E0D4] px-4 py-3 flex gap-2">
-              <button onClick={() => setShowWaiterModal(true)} className="w-12 h-12 rounded-2xl bg-[#FDECEA] text-[#C0392B] text-xl flex items-center justify-center border border-[#F5C6C2] shrink-0">🔔</button>
-              <button onClick={() => { setCartTab('cart'); setScreen('cart') }}
-                className="flex-1 bg-[#1C1A18] text-white font-semibold rounded-2xl flex items-center justify-between px-4 py-2.5">
-                <span>Кошик</span>
-                <span className="bg-[#C17F3B] text-white text-xs font-bold px-2.5 py-1 rounded-full">{totalCount()}</span>
+
+          {/* Bottom bar — always visible, but waiter + cart locked if cart empty */}
+          <div className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t border-[#E8E0D4] px-4 py-3 flex gap-2">
+            {/* Waiter button */}
+            <div className="relative">
+              <button
+                onClick={() => {
+                  if (waiterAccessible) {
+                    setShowWaiterModal(true)
+                  } else {
+                    setShowWaiterTooltip(true)
+                    setTimeout(() => setShowWaiterTooltip(false), 2500)
+                  }
+                }}
+                className={`w-12 h-12 rounded-2xl text-xl flex items-center justify-center border shrink-0 transition-all ${
+                  waiterAccessible
+                    ? 'bg-[#FDECEA] text-[#C0392B] border-[#F5C6C2]'
+                    : 'bg-[#F5F3EF] text-[#C0C0C0] border-[#E8E0D4] cursor-not-allowed opacity-50'
+                }`}>
+                🔔
               </button>
+              {showWaiterTooltip && (
+                <div className="absolute bottom-14 left-1/2 -translate-x-1/2 bg-[#1C1A18] text-white text-xs rounded-xl px-3 py-2 whitespace-nowrap shadow-lg">
+                  Спочатку додайте щось до кошика
+                  <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-[#1C1A18]" />
+                </div>
+              )}
             </div>
-          )}
+
+            {/* Cart button */}
+            <div className="relative flex-1">
+              <button
+                onClick={() => {
+                  if (cartAccessible) {
+                    setCartTab('cart')
+                    setScreen('cart')
+                  } else {
+                    setShowCartTooltip(true)
+                    setTimeout(() => setShowCartTooltip(false), 2500)
+                  }
+                }}
+                className={`w-full h-12 font-semibold rounded-2xl flex items-center justify-between px-4 transition-all ${
+                  cartAccessible
+                    ? 'bg-[#1C1A18] text-white'
+                    : 'bg-[#E8E0D4] text-[#9A9490] cursor-not-allowed'
+                }`}>
+                <span>Кошик</span>
+                <span className={`text-xs font-bold px-2.5 py-1 rounded-full transition-all ${
+                  myCartCount > 0 ? 'bg-[#C17F3B] text-white' : 'bg-white/30 text-white/50'
+                }`}>
+                  {myCartCount > 0 ? myCartCount : '0'}
+                </span>
+              </button>
+              {showCartTooltip && (
+                <div className="absolute bottom-14 left-1/2 -translate-x-1/2 bg-[#1C1A18] text-white text-xs rounded-xl px-3 py-2 whitespace-nowrap shadow-lg">
+                  Додайте страви, щоб відкрити кошик
+                  <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-[#1C1A18]" />
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
@@ -371,17 +443,96 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
         </div>
       )}
 
-      {screen === 'success' && (
+      {screen === 'success' && lastOrder && (
+        <div className="min-h-screen bg-[#FAF8F5] flex flex-col">
+          {/* Success header */}
+          <div className="bg-white border-b border-[#E8E0D4] px-4 py-4 flex items-center gap-3 sticky top-0 z-40">
+            <button onClick={() => setScreen('menu')} className="w-9 h-9 rounded-xl bg-[#F5F3EF] border border-[#E8E0D4] flex items-center justify-center text-lg">←</button>
+            <div style={{fontFamily:'Playfair Display,serif'}} className="text-lg font-bold flex-1">Рахунок</div>
+            <div className="flex items-center gap-2 bg-[#E6F4ED] text-[#3A7D58] rounded-full px-3 py-1 text-xs font-semibold">✅ Прийнято</div>
+          </div>
+
+          <div className="flex-1 px-4 py-6 max-w-md mx-auto w-full">
+            {/* Confirmation banner */}
+            <div className="bg-[#E6F4ED] border border-[#B8DEC9] rounded-2xl p-5 mb-6 text-center">
+              <div className="text-3xl mb-2">✅</div>
+              <div style={{fontFamily:'Playfair Display,serif'}} className="text-xl font-bold text-[#2E7D54] mb-1">Замовлення прийнято!</div>
+              <p className="text-[#3A7D58] text-sm">Ваше замовлення вже на кухні. Стіл №{tableId}.</p>
+            </div>
+
+            {/* The actual bill — doesn't disappear */}
+            <div className="bg-white border border-[#E8E0D4] rounded-2xl overflow-hidden mb-5">
+              <div className="px-5 py-4 border-b border-[#F0EAE2] flex items-center justify-between">
+                <span style={{fontFamily:'Playfair Display,serif'}} className="font-bold text-lg">Ваш рахунок</span>
+                <span className="text-xs text-[#9A9490]">
+                  {new Date(lastOrder.submittedAt).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </div>
+
+              {/* Group by guest */}
+              {(() => {
+                const byGuest: Record<string, Array<CartItem & { guest: string }>> = {}
+                lastOrder.items.forEach(item => {
+                  if (!byGuest[item.guest]) byGuest[item.guest] = []
+                  byGuest[item.guest].push(item)
+                })
+                return Object.entries(byGuest).map(([guest, items]) => {
+                  const grouped: Record<string, CartItem & {qty:number}> = {}
+                  items.forEach(i => {
+                    if (!grouped[i.id]) grouped[i.id] = {...i, qty: 0}
+                    grouped[i.id].qty++
+                  })
+                  const gTotal = Object.values(grouped).reduce((s, i) => s + i.price * i.qty, 0)
+                  const c = gColor(guest)
+                  const isMe = guest === currentUser
+                  return (
+                    <div key={guest} className="px-5 py-3 border-b border-[#F9F5F0] last:border-0">
+                      <div className="flex items-center gap-2 mb-2">
+                        <div style={{background:c.bg,color:c.fg}} className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold">{ini(guest)}</div>
+                        <span className="text-sm font-semibold">{guest}{isMe ? ' (ви)' : ''}</span>
+                        <span className="ml-auto font-bold text-[#C17F3B]">{gTotal} ₴</span>
+                      </div>
+                      {Object.values(grouped).map(item => (
+                        <div key={item.id} className="flex justify-between text-sm py-1 text-[#6B6560]">
+                          <span>{item.emoji} {item.name}{item.qty > 1 ? ` ×${item.qty}` : ''}</span>
+                          <span>{item.price * item.qty} ₴</span>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                })
+              })()}
+
+              <div className="px-5 py-4 bg-[#FAF8F5]">
+                <div className="flex justify-between items-center">
+                  <span className="font-semibold">Разом по столу №{tableId}</span>
+                  <span style={{fontFamily:'Playfair Display,serif'}} className="text-2xl font-bold text-[#C17F3B]">{lastOrder.total} ₴</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3">
+              <button onClick={() => setScreen('menu')}
+                className="w-full py-3.5 bg-[#C17F3B] text-white font-semibold rounded-2xl">
+                Додати ще щось
+              </button>
+              <button onClick={() => setShowWaiterModal(true)}
+                className="w-full py-3.5 bg-[#FDECEA] text-[#C0392B] font-semibold rounded-2xl border border-[#F5C6C2]">
+                🔔 Викликати офіціанта
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Fallback success screen if somehow lastOrder is null */}
+      {screen === 'success' && !lastOrder && (
         <div className="min-h-screen flex items-center justify-center px-6 bg-white text-center">
           <div>
             <div className="w-20 h-20 bg-[#E6F4ED] rounded-full flex items-center justify-center text-4xl mx-auto mb-5">✅</div>
             <div style={{fontFamily:'Playfair Display,serif'}} className="text-3xl font-bold mb-3">Замовлення прийнято!</div>
             <p className="text-[#6B6560] mb-6">Ваше замовлення вже на кухні.<br />Очікуйте — персонал принесе все до столу №{tableId}.</p>
-            <div className="inline-flex items-center gap-2 bg-[#F5E9D8] text-[#9A6328] rounded-full px-5 py-2.5 font-semibold mb-8">🪑 Стіл №{tableId}</div>
-            <div className="flex flex-col gap-3 max-w-xs mx-auto">
-              <button onClick={() => setScreen('menu')} className="w-full py-3.5 bg-[#C17F3B] text-white font-semibold rounded-2xl">Додати ще щось</button>
-              <button onClick={() => setShowWaiterModal(true)} className="w-full py-3.5 bg-[#FDECEA] text-[#C0392B] font-semibold rounded-2xl border border-[#F5C6C2]">🔔 Викликати офіціанта</button>
-            </div>
+            <button onClick={() => setScreen('menu')} className="w-full max-w-xs py-3.5 bg-[#C17F3B] text-white font-semibold rounded-2xl mx-auto block">Додати ще щось</button>
           </div>
         </div>
       )}

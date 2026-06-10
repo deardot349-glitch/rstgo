@@ -19,7 +19,16 @@ export default function SignupPage() {
 
   const handleSubmit = async () => {
     setLoading(true)
-    setTimeout(() => { window.location.href = '/dashboard' }, 1500)
+    // After creating the account, redirect to the NFC onboarding page
+    // passing the restaurant details as query params
+    setTimeout(() => {
+      const params = new URLSearchParams({
+        name: form.restaurantName,
+        slug: form.slug || 'your-restaurant',
+        tables: form.tableCount,
+      })
+      window.location.href = `/onboarding?${params.toString()}`
+    }, 1500)
   }
 
   const stepLabel = ['Акаунт', 'Ресторан', 'План']
@@ -169,6 +178,16 @@ export default function SignupPage() {
                   </div>
                 ))}
               </div>
+
+              {/* NFC teaser */}
+              <div className="bg-[#F5E9D8] border border-[#E8C99A] rounded-2xl p-4 mb-6 flex items-start gap-3">
+                <span className="text-2xl shrink-0">📲</span>
+                <div>
+                  <div className="font-semibold text-[#9A6328] text-sm">Наступний крок: налаштування NFC</div>
+                  <div className="text-xs text-[#7A5520] mt-1">Після реєстрації ми допоможемо вам налаштувати NFC-теги для кожного столу — це займе кілька хвилин.</div>
+                </div>
+              </div>
+
               <div className="flex gap-3">
                 <button onClick={() => setStep(2)}
                   className="px-6 py-3.5 border border-[#E8E0D4] bg-white rounded-xl text-sm font-medium hover:border-[#C17F3B] transition-colors">
