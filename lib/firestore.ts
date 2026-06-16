@@ -26,22 +26,22 @@ export type WaiterCallDoc = {
   resolved: boolean
 }
 
-// ── Table sessions (per-guest carts at a table) ──
+// ── Table sessions ──
 
 export function subscribeTableSessions(
   slug: string,
   tableNumber: number,
   callback: (sessions: TableSession[]) => void
 ) {
+  // Simple query — no composite index needed
   const q = query(
     collection(db, 'table_sessions'),
     where('restaurant_slug', '==', slug),
     where('table_number', '==', tableNumber),
   )
   return onSnapshot(q, snap => {
-    const sessions = snap.docs.map(d => d.data() as TableSession)
-    callback(sessions)
-  })
+    callback(snap.docs.map(d => d.data() as TableSession))
+  }, err => console.error('table_sessions error:', err))
 }
 
 export async function upsertTableSession(
@@ -63,17 +63,25 @@ export async function deleteTableSession(slug: string, tableNumber: number, gues
 }
 
 // ── Orders ──
+// NOTE: uses only where() — no orderBy() to avoid needing a composite index.
+// We sort client-side instead.
 
 export function subscribeOrders(slug: string, callback: (orders: OrderDoc[]) => void) {
   const q = query(
     collection(db, 'orders_rt'),
     where('restaurant_slug', '==', slug),
-    orderBy('created_at', 'desc'),
   )
   return onSnapshot(q, snap => {
-    const orders = snap.docs.map(d => ({ id: d.id, ...d.data() } as OrderDoc))
+    const orders = snap.docs
+      .map(d => ({ id: d.id, ...d.data() } as OrderDoc))
+      .sort((a, b) => {
+        // Sort newest first, client-side
+        const aTime = a.created_at?.toDate?.()?.getTime() ?? 0
+        const bTime = b.created_at?.toDate?.()?.getTime() ?? 0
+        return bTime - aTime
+      })
     callback(orders)
-  })
+  }, err => console.error('orders_rt error:', err))
 }
 
 export async function createOrder(
@@ -94,18 +102,25 @@ export async function markOrderDone(orderId: string) {
 }
 
 // ── Waiter calls ──
+// NOTE: uses only where('restaurant_slug') — no orderBy or resolved filter
+// to avoid composite index. We filter resolved client-side.
 
 export function subscribeWaiterCalls(slug: string, callback: (calls: WaiterCallDoc[]) => void) {
   const q = query(
     collection(db, 'waiter_calls_rt'),
     where('restaurant_slug', '==', slug),
-    where('resolved', '==', false),
-    orderBy('created_at', 'desc'),
   )
   return onSnapshot(q, snap => {
-    const calls = snap.docs.map(d => ({ id: d.id, ...d.data() } as WaiterCallDoc))
+    const calls = snap.docs
+      .map(d => ({ id: d.id, ...d.data() } as WaiterCallDoc))
+      .filter(c => !c.resolved)
+      .sort((a, b) => {
+        const aTime = a.created_at?.toDate?.()?.getTime() ?? 0
+        const bTime = b.created_at?.toDate?.()?.getTime() ?? 0
+        return bTime - aTime
+      })
     callback(calls)
-  })
+  }, err => console.error('waiter_calls_rt error:', err))
 }
 
 export async function createWaiterCall(slug: string, tableNumber: number, guestName: string) {
@@ -130,7 +145,7 @@ export type MenuItemDoc = {
   desc: string
   price: number
   available: boolean
-  imageUrl?: string   // optional — from Supabase Storage
+  imageUrl?: string
 }
 export type MenuCategoryDoc = {
   id: string
@@ -143,7 +158,7 @@ export function subscribeMenu(slug: string, callback: (categories: MenuCategoryD
   return onSnapshot(doc(db, 'restaurants', slug), snap => {
     const data = snap.data()
     callback((data?.menu as MenuCategoryDoc[]) || [])
-  })
+  }, err => console.error('menu error:', err))
 }
 
 export async function saveMenu(slug: string, categories: MenuCategoryDoc[]) {
