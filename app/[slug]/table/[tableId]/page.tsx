@@ -1,36 +1,41 @@
 'use client'
 import { useState, useEffect, use } from 'react'
-import { supabase } from '@/lib/supabase'
+import {
+  subscribeTableSessions, upsertTableSession, deleteTableSession,
+  createOrder, createWaiterCall, subscribeMenu,
+} from '@/lib/firestore'
+import type { MenuCategoryDoc } from '@/lib/firestore'
 
-const MENU = [
-  { cat: 'Салати', emoji: '🥗', items: [
-    { id: 's1', name: 'Грецький салат', desc: 'Томати, огірок, маслини, фета', price: 149 },
-    { id: 's2', name: 'Цезар з куркою', desc: 'Листя айсберг, гриль, пармезан', price: 179 },
-    { id: 's3', name: 'Теплий салат', desc: 'Індичка, гриби, томати черрі', price: 189 },
+// Fallback/demo menu used until the restaurant's real menu loads from Firestore
+const DEFAULT_MENU: MenuCategoryDoc[] = [
+  { id: 'c1', name: 'Салати', emoji: '🥗', items: [
+    { id: 's1', name: 'Грецький салат', desc: 'Томати, огірок, маслини, фета', price: 149, available: true },
+    { id: 's2', name: 'Цезар з куркою', desc: 'Листя айсберг, гриль, пармезан', price: 179, available: true },
+    { id: 's3', name: 'Теплий салат', desc: 'Індичка, гриби, томати черрі', price: 189, available: true },
   ]},
-  { cat: 'Супи', emoji: '🍲', items: [
-    { id: 'p1', name: 'Борщ', desc: 'Традиційний зі сметаною та пампушками', price: 129 },
-    { id: 'p2', name: 'Крем-суп', desc: 'Гарбуз, імбир, вершки', price: 119 },
+  { id: 'c2', name: 'Супи', emoji: '🍲', items: [
+    { id: 'p1', name: 'Борщ', desc: 'Традиційний зі сметаною та пампушками', price: 129, available: true },
+    { id: 'p2', name: 'Крем-суп', desc: 'Гарбуз, імбир, вершки', price: 119, available: true },
   ]},
-  { cat: 'Основні', emoji: '🍽', items: [
-    { id: 'm1', name: 'Стейк свинина', desc: '350г, картопля фрі, соус', price: 289 },
-    { id: 'm2', name: 'Куряче філе', desc: 'Гриль, рис, сезонні овочі', price: 239 },
-    { id: 'm3', name: 'Лосось', desc: 'Запечений, пюре, лимонний соус', price: 349 },
-    { id: 'm4', name: 'Вареники', desc: 'З картоплею, смажена цибуля', price: 149 },
+  { id: 'c3', name: 'Основні', emoji: '🍽', items: [
+    { id: 'm1', name: 'Стейк свинина', desc: '350г, картопля фрі, соус', price: 289, available: true },
+    { id: 'm2', name: 'Куряче філе', desc: 'Гриль, рис, сезонні овочі', price: 239, available: true },
+    { id: 'm3', name: 'Лосось', desc: 'Запечений, пюре, лимонний соус', price: 349, available: true },
+    { id: 'm4', name: 'Вареники', desc: 'З картоплею, смажена цибуля', price: 149, available: true },
   ]},
-  { cat: 'Піца', emoji: '🍕', items: [
-    { id: 'z1', name: 'Маргарита', desc: 'Томат, моцарела, базилік', price: 229 },
-    { id: 'z2', name: 'Пепероні', desc: 'Гостра ковбаска, моцарела', price: 259 },
+  { id: 'c4', name: 'Піца', emoji: '🍕', items: [
+    { id: 'z1', name: 'Маргарита', desc: 'Томат, моцарела, базилік', price: 229, available: true },
+    { id: 'z2', name: 'Пепероні', desc: 'Гостра ковбаска, моцарела', price: 259, available: true },
   ]},
-  { cat: 'Напої', emoji: '🥤', items: [
-    { id: 'n1', name: 'Свіжовичавлений', desc: 'Апельсин, яблуко або морква', price: 89 },
-    { id: 'n2', name: 'Кава', desc: 'Американо, латте або капучіно', price: 79 },
-    { id: 'n3', name: 'Лимонад', desc: "М'ята або ягідний", price: 99 },
-    { id: 'n4', name: 'Вода', desc: 'Негазована або газована 500мл', price: 39 },
+  { id: 'c5', name: 'Напої', emoji: '🥤', items: [
+    { id: 'n1', name: 'Свіжовичавлений', desc: 'Апельсин, яблуко або морква', price: 89, available: true },
+    { id: 'n2', name: 'Кава', desc: 'Американо, латте або капучіно', price: 79, available: true },
+    { id: 'n3', name: 'Лимонад', desc: "М'ята або ягідний", price: 99, available: true },
+    { id: 'n4', name: 'Вода', desc: 'Негазована або газована 500мл', price: 39, available: true },
   ]},
-  { cat: 'Десерти', emoji: '🍰', items: [
-    { id: 'd1', name: 'Медовик', desc: 'Класичний торт зі сметанним кремом', price: 119 },
-    { id: 'd2', name: 'Тірамісу', desc: 'Маскарпоне, кава, какао', price: 139 },
+  { id: 'c6', name: 'Десерти', emoji: '🍰', items: [
+    { id: 'd1', name: 'Медовик', desc: 'Класичний торт зі сметанним кремом', price: 119, available: true },
+    { id: 'd2', name: 'Тірамісу', desc: 'Маскарпоне, кава, какао', price: 139, available: true },
   ]},
 ]
 
@@ -55,11 +60,12 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
   const { slug, tableId } = use(paramsPromise)
   const tableNum = parseInt(tableId)
 
+  const [menu, setMenu] = useState<MenuCategoryDoc[]>(DEFAULT_MENU)
   const [screen, setScreen] = useState<'name'|'menu'|'cart'|'success'>('name')
   const [currentUser, setCurrentUser] = useState('')
   const [nameInput, setNameInput] = useState('')
   const [sessions, setSessions] = useState<GuestSession[]>([])
-  const [activeCat, setActiveCat] = useState(MENU[0].cat)
+  const [activeCat, setActiveCat] = useState(DEFAULT_MENU[0].id)
   const [cartTab, setCartTab] = useState<'cart'|'split'>('cart')
   const [showWaiterModal, setShowWaiterModal] = useState(false)
   const [showRemoveModal, setShowRemoveModal] = useState<string|null>(null)
@@ -71,32 +77,34 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
   const [showCartTooltip, setShowCartTooltip] = useState(false)
   const [showWaiterTooltip, setShowWaiterTooltip] = useState(false)
 
+  // Subscribe to live table sessions (carts) for this table
   useEffect(() => {
-    const fetchSessions = async () => {
-      const { data } = await supabase
-        .from('table_sessions')
-        .select('guest_name, cart')
-        .eq('restaurant_slug', slug)
-        .eq('table_number', tableNum)
-      if (data) setSessions(data as GuestSession[])
-    }
-
-    fetchSessions()
-
-    const channel = supabase
-      .channel(`table_${slug}_${tableNum}`)
-      .on('postgres_changes', {
-        event: '*', schema: 'public', table: 'table_sessions',
-        filter: `restaurant_slug=eq.${slug}`,
-      }, () => fetchSessions())
-      .subscribe()
-
-    return () => { supabase.removeChannel(channel) }
+    const unsubscribe = subscribeTableSessions(slug, tableNum, (data) => {
+      setSessions(data)
+    })
+    return () => unsubscribe()
   }, [slug, tableNum])
+
+  // Subscribe to the restaurant's live menu (falls back to DEFAULT_MENU)
+  useEffect(() => {
+    const unsubscribe = subscribeMenu(slug, (categories) => {
+      if (categories && categories.length > 0) {
+        setMenu(categories)
+        setActiveCat(prev => categories.some(c => c.id === prev) ? prev : categories[0].id)
+      }
+    })
+    return () => unsubscribe()
+  }, [slug])
+
+  const allItems = () => menu.flatMap(c => c.items)
+  const findItem = (itemId: string) => {
+    const item = allItems().find(i => i.id === itemId)!
+    const cat = menu.find(c => c.items.some(i => i.id === itemId))!
+    return { item, cat }
+  }
 
   const myCart: CartItem[] = sessions.find(s => s.guest_name === currentUser)?.cart || []
   const getQty = (id: string) => myCart.filter(i => i.id === id).length
-  const totalCount = () => sessions.reduce((s, g) => s + (g.cart?.length || 0), 0)
   const myCartCount = myCart.length
 
   // Cart and waiter button are only accessible if the user has added items
@@ -105,10 +113,7 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
 
   const saveCart = async (cart: CartItem[]) => {
     setSaving(true)
-    await supabase.from('table_sessions').upsert({
-      restaurant_slug: slug, table_number: tableNum, guest_name: currentUser,
-      cart, updated_at: new Date().toISOString(),
-    }, { onConflict: 'restaurant_slug,table_number,guest_name' })
+    await upsertTableSession(slug, tableNum, currentUser, cart)
     setSaving(false)
   }
 
@@ -116,16 +121,12 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
     if (!nameInput.trim()) return
     const user = nameInput.trim()
     setCurrentUser(user)
-    await supabase.from('table_sessions').upsert({
-      restaurant_slug: slug, table_number: tableNum, guest_name: user,
-      cart: [], updated_at: new Date().toISOString(),
-    }, { onConflict: 'restaurant_slug,table_number,guest_name' })
+    await upsertTableSession(slug, tableNum, user, [])
     setScreen('menu')
   }
 
   const addToCart = async (itemId: string) => {
-    const item = MENU.flatMap(c => c.items).find(i => i.id === itemId)!
-    const cat = MENU.find(c => c.items.some(i => i.id === itemId))!
+    const { item, cat } = findItem(itemId)
     const newCart = [...myCart, { id: item.id, name: item.name, price: item.price, emoji: cat.emoji }]
     setSessions(prev => prev.map(s => s.guest_name === currentUser ? {...s, cart: newCart} : s))
     await saveCart(newCart)
@@ -134,11 +135,10 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
   const changeQty = async (itemId: string, delta: number) => {
     let newCart = [...myCart]
     if (delta === 1) {
-      const item = MENU.flatMap(c => c.items).find(i => i.id === itemId)!
-      const cat = MENU.find(c => c.items.some(i => i.id === itemId))!
+      const { item, cat } = findItem(itemId)
       newCart.push({ id: item.id, name: item.name, price: item.price, emoji: cat.emoji })
     } else {
-      const idx = newCart.findLastIndex(i => i.id === itemId)
+      const idx = newCart.map(i => i.id).lastIndexOf(itemId)
       if (idx !== -1) newCart.splice(idx, 1)
     }
     setSessions(prev => prev.map(s => s.guest_name === currentUser ? {...s, cart: newCart} : s))
@@ -146,23 +146,19 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
   }
 
   const removeGuest = async (name: string) => {
-    await supabase.from('table_sessions').delete()
-      .eq('restaurant_slug', slug).eq('table_number', tableNum).eq('guest_name', name)
+    await deleteTableSession(slug, tableNum, name)
     setSessions(prev => prev.filter(s => s.guest_name !== name))
     setShowRemoveModal(null)
   }
 
   const leaveTable = async () => {
-    await supabase.from('table_sessions').delete()
-      .eq('restaurant_slug', slug).eq('table_number', tableNum).eq('guest_name', currentUser)
+    await deleteTableSession(slug, tableNum, currentUser)
     setSessions(prev => prev.filter(s => s.guest_name !== currentUser))
     setCurrentUser(''); setNameInput(''); setShowLeaveModal(false); setScreen('name')
   }
 
   const callWaiter = async () => {
-    await supabase.from('waiter_calls_rt').insert({
-      restaurant_slug: slug, table_number: tableNum, guest_name: currentUser || 'Гість',
-    })
+    await createWaiterCall(slug, tableNum, currentUser || 'Гість')
     setShowWaiterModal(false)
     alert(`✅ Офіціант повідомлений! Очікуйте біля столу №${tableId}`)
   }
@@ -171,28 +167,25 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
     const activeGuests = sessions.filter(s => s.cart.length > 0)
     if (!activeGuests.length) return
 
-    const allItems = activeGuests.flatMap(s => s.cart.map(item => ({ ...item, guest: s.guest_name })))
-    const total = allItems.reduce((s, i) => s + i.price, 0)
+    const items = activeGuests.flatMap(s => s.cart.map(item => ({ ...item, guest: s.guest_name })))
+    const total = items.reduce((s, i) => s + i.price, 0)
 
     // Save order record BEFORE clearing carts so success screen can show it
     const orderRecord: OrderRecord = {
-      items: allItems,
+      items,
       total,
       submittedAt: new Date().toISOString(),
     }
     setLastOrder(orderRecord)
 
-    await supabase.from('orders_rt').insert({
-      restaurant_slug: slug, table_number: tableNum, items: allItems, total, done: false,
-    })
-    await supabase.from('table_sessions')
-      .update({ cart: [], updated_at: new Date().toISOString() })
-      .eq('restaurant_slug', slug).eq('table_number', tableNum)
+    await createOrder(slug, tableNum, items, total)
+    await Promise.all(activeGuests.map(s => upsertTableSession(slug, tableNum, s.guest_name, [])))
     setSessions(prev => prev.map(s => ({...s, cart: []})))
     setScreen('success')
   }
 
   const otherGuests = sessions.filter(s => s.guest_name !== currentUser)
+  const activeCatData = menu.find(c => c.id === activeCat) || menu[0]
 
   return (
     <div className="min-h-screen bg-[#FAF8F5] font-sans">
@@ -230,7 +223,7 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
         </div>
       )}
 
-      {screen === 'menu' && (
+      {screen === 'menu' && activeCatData && (
         <div className="flex flex-col min-h-screen">
           <div className="sticky top-0 z-40 bg-white border-b border-[#E8E0D4] px-4 py-3 flex items-center gap-3">
             <div style={{background:gColor(currentUser).fg}} className="w-9 h-9 rounded-full flex items-center justify-center text-white font-bold text-sm shrink-0">{ini(currentUser)}</div>
@@ -241,37 +234,39 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
           </div>
           <div className="sticky top-[61px] z-30 bg-white border-b border-[#E8E0D4]">
             <div className="flex gap-2 px-4 py-2.5 overflow-x-auto" style={{scrollbarWidth:'none'}}>
-              {MENU.map(c => (
-                <button key={c.cat} onClick={() => setActiveCat(c.cat)}
-                  className={`shrink-0 px-4 py-1.5 rounded-full text-xs font-semibold transition-all ${activeCat === c.cat ? 'bg-[#C17F3B] text-white' : 'bg-[#F5F3EF] text-[#6B6560]'}`}>
-                  {c.emoji} {c.cat}
+              {menu.map(c => (
+                <button key={c.id} onClick={() => setActiveCat(c.id)}
+                  className={`shrink-0 px-4 py-1.5 rounded-full text-xs font-semibold transition-all ${activeCat === c.id ? 'bg-[#C17F3B] text-white' : 'bg-[#F5F3EF] text-[#6B6560]'}`}>
+                  {c.emoji} {c.name}
                 </button>
               ))}
             </div>
           </div>
           <div className="flex-1 p-4 pb-28">
-            {MENU.filter(c => c.cat === activeCat).map(cat => (
-              <div key={cat.cat}>
-                <div style={{fontFamily:'Playfair Display,serif'}} className="text-lg font-bold mb-3">{cat.emoji} {cat.cat}</div>
-                <div className="grid grid-cols-2 gap-3 mb-6">
-                  {cat.items.map(item => {
-                    const qty = getQty(item.id)
-                    return (
-                      <div key={item.id} className={`bg-white rounded-2xl p-3 border relative ${qty > 0 ? 'border-[#C17F3B] shadow-sm' : 'border-[#E8E0D4]'}`}>
-                        {qty > 0 && <div className="absolute top-2 right-2 w-5 h-5 bg-[#3A7D58] rounded-full text-white text-xs flex items-center justify-center font-bold">{qty}</div>}
-                        <div className="text-3xl mb-2">{cat.emoji}</div>
-                        <div className="font-semibold text-xs mb-1 leading-tight">{item.name}</div>
-                        <div className="text-[10px] text-[#9A9490] mb-2 leading-tight">{item.desc}</div>
-                        <div className="flex items-center justify-between">
-                          <span className="font-bold text-sm text-[#C17F3B]">{item.price} ₴</span>
-                          <button onClick={() => addToCart(item.id)} className="w-7 h-7 rounded-full bg-[#C17F3B] text-white flex items-center justify-center hover:bg-[#9A6328]">+</button>
-                        </div>
+            <div>
+              <div style={{fontFamily:'Playfair Display,serif'}} className="text-lg font-bold mb-3">{activeCatData.emoji} {activeCatData.name}</div>
+              <div className="grid grid-cols-2 gap-3 mb-6">
+                {activeCatData.items.filter(i => i.available).map(item => {
+                  const qty = getQty(item.id)
+                  return (
+                    <div key={item.id} className={`bg-white rounded-2xl p-3 border relative ${qty > 0 ? 'border-[#C17F3B] shadow-sm' : 'border-[#E8E0D4]'}`}>
+                      {qty > 0 && <div className="absolute top-2 right-2 w-5 h-5 bg-[#3A7D58] rounded-full text-white text-xs flex items-center justify-center font-bold z-10">{qty}</div>}
+                      {item.imageUrl ? (
+                        <img src={item.imageUrl} alt={item.name} className="w-full h-24 object-cover rounded-xl mb-2" />
+                      ) : (
+                        <div className="text-3xl mb-2">{activeCatData.emoji}</div>
+                      )}
+                      <div className="font-semibold text-xs mb-1 leading-tight">{item.name}</div>
+                      <div className="text-[10px] text-[#9A9490] mb-2 leading-tight">{item.desc}</div>
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-sm text-[#C17F3B]">{item.price} ₴</span>
+                        <button onClick={() => addToCart(item.id)} className="w-7 h-7 rounded-full bg-[#C17F3B] text-white flex items-center justify-center hover:bg-[#9A6328]">+</button>
                       </div>
-                    )
-                  })}
-                </div>
+                    </div>
+                  )
+                })}
               </div>
-            ))}
+            </div>
           </div>
 
           {/* Bottom bar — always visible, but waiter + cart locked if cart empty */}

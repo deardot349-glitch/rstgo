@@ -1,0 +1,32 @@
+import { storage } from './firebase'
+import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage'
+
+export async function uploadMenuItemImage(
+  restaurantId: string,
+  file: File
+): Promise<string> {
+  const ext = file.name.split('.').pop()
+  const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
+  const storageRef = ref(storage, `restaurants/${restaurantId}/menu/${fileName}`)
+  await uploadBytes(storageRef, file)
+  return await getDownloadURL(storageRef)
+}
+
+export async function uploadRestaurantLogo(
+  restaurantId: string,
+  file: File
+): Promise<string> {
+  const ext = file.name.split('.').pop()
+  const storageRef = ref(storage, `restaurants/${restaurantId}/logo.${ext}`)
+  await uploadBytes(storageRef, file)
+  return await getDownloadURL(storageRef)
+}
+
+export async function deleteImage(url: string): Promise<void> {
+  try {
+    const storageRef = ref(storage, url)
+    await deleteObject(storageRef)
+  } catch {
+    // ignore if already deleted
+  }
+}

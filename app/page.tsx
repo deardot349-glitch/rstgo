@@ -38,9 +38,9 @@ const FEATURES = [
 ]
 
 const HOW = [
-  { step: '01', title: 'Зареєструйтесь', desc: 'Введіть дані ресторану, оберіть план — акаунт готовий.' },
-  { step: '02', title: 'Налаштуйте меню та столики', desc: 'Додайте категорії, страви з описами та цінами. Вкажіть кількість столів.' },
-  { step: '03', title: 'Роздрукуйте або замовте NFC', desc: 'Отримайте унікальні посилання або QR для кожного столу. Запишіть на NFC-теги.' },
+  { step: '01', title: 'Зареєструйтесь', desc: 'Введіть дані ресторану, оберіть план — акаунт готовий за 2 хвилини.' },
+  { step: '02', title: 'Налаштуйте меню та столики', desc: 'Додайте категорії, страви з описами, фото та цінами. Вкажіть кількість столів.' },
+  { step: '03', title: 'Отримайте NFC-теги поштою', desc: 'Ми надсилаємо готові NFC-наклейки для кожного столу. Просто наклейте — посилання вже записане.' },
   { step: '04', title: 'Персонал входить за PIN', desc: 'Захищена панель тільки для вашої команди. Замовлення — в реальному часі.' },
 ]
 
@@ -59,7 +59,7 @@ const PLANS = [
     price: 999,
     period: 'на місяць',
     desc: 'Для ресторанів з повноцінною роботою',
-    features: ['До 20 столів', 'Необмежене меню', 'NFC + QR підтримка', 'Аналітика замовлень', 'Розподіл рахунків', 'Пріоритетна підтримка', 'Власний колір/бренд'],
+    features: ['До 20 столів', 'Необмежене меню', 'NFC-теги включено', 'Аналітика замовлень', 'Розподіл рахунків', 'Пріоритетна підтримка', 'Власний колір/бренд'],
     cta: 'Спробувати Pro',
     highlighted: true,
   },
@@ -84,8 +84,8 @@ const FAQS = [
     a: 'Є окрема захищена панель за унікальним посиланням. Вхід — за PIN-кодом, який ви задаєте. Замовлення з\'являються автоматично в реальному часі.',
   },
   {
-    q: 'Що таке NFC-теги і де їх взяти?',
-    a: 'NFC-теги — маленькі наклейки або підставки, на які записується посилання. Їх можна замовити на AliExpress або в спеціалізованих магазинах. Ми надаємо інструкцію з налаштування.',
+    q: 'Що таке NFC-теги і як я їх отримаю?',
+    a: 'NFC-теги — маленькі наклейки, на які записується посилання на ваше меню. Після реєстрації ми надсилаємо готові теги поштою — по одному на кожен стіл. Вам залишається лише наклеїти.',
   },
   {
     q: 'Чи можу я редагувати меню у будь-який час?',
@@ -144,7 +144,6 @@ export default function LandingPage() {
 
       {/* ── HERO ── */}
       <section className="pt-32 pb-24 px-6 relative overflow-hidden">
-        {/* Decorative blobs */}
         <div className="absolute top-20 right-0 w-96 h-96 bg-[#C17F3B]/8 rounded-full blur-3xl pointer-events-none" />
         <div className="absolute bottom-0 left-0 w-80 h-80 bg-[#3A7D58]/6 rounded-full blur-3xl pointer-events-none" />
 
@@ -173,10 +172,9 @@ export default function LandingPage() {
             </a>
           </div>
 
-          {/* MOCKUP — phone + order screen */}
+          {/* MOCKUP */}
           <div className="relative mx-auto max-w-sm">
             <div className="bg-white rounded-[2.5rem] shadow-2xl border border-[#E8E0D4] overflow-hidden">
-              {/* Phone status bar */}
               <div className="bg-[#1C1A18] px-6 pt-4 pb-3">
                 <div className="flex justify-between text-white text-xs opacity-60 mb-3">
                   <span>9:41</span><span>●●●</span>
@@ -216,7 +214,6 @@ export default function LandingPage() {
                 </div>
               </div>
             </div>
-            {/* Floating badge */}
             <div className="absolute -right-4 top-24 bg-white rounded-2xl shadow-xl border border-[#E8E0D4] px-4 py-3">
               <div className="text-xs text-[#6B6560] mb-0.5">Нове замовлення</div>
               <div className="font-semibold text-sm">🪑 Стіл №4</div>
@@ -272,6 +269,18 @@ export default function LandingPage() {
                 <p className="text-white/50 leading-relaxed">{h.desc}</p>
               </div>
             ))}
+          </div>
+
+          {/* NFC shipping banner */}
+          <div className="mt-10 bg-[#C17F3B]/10 border border-[#C17F3B]/25 rounded-2xl p-6 flex items-start gap-4">
+            <span className="text-3xl shrink-0">📦</span>
+            <div>
+              <div className="text-white font-semibold text-lg mb-1">NFC-теги надсилаємо ми</div>
+              <p className="text-white/60 text-sm leading-relaxed">
+                Після реєстрації ми відправляємо готові NFC-наклейки поштою — по одному тегу на кожен стіл.
+                Посилання вже записане. Ваше завдання — лише наклеїти на стіл.
+              </p>
+            </div>
           </div>
         </div>
       </section>
@@ -343,7 +352,7 @@ export default function LandingPage() {
           <h2 className="font-display text-4xl md:text-5xl font-bold text-white mb-6">
             Готові запустити <br /><span className="text-[#C17F3B] italic">цифрове меню?</span>
           </h2>
-          <p className="text-white/50 text-lg mb-10">Безкоштовний план. Жодної кредитної картки. Налаштування за 10 хвилин.</p>
+          <p className="text-white/50 text-lg mb-10">Безкоштовний план. Жодної кредитної картки. NFC-теги надсилаємо ми.</p>
           <Link href="/signup" className="inline-flex items-center gap-2 bg-[#C17F3B] hover:bg-[#9A6328] text-white font-semibold text-lg px-10 py-5 rounded-2xl transition-all duration-200 shadow-xl shadow-[#C17F3B]/30">
             Почати безкоштовно →
           </Link>

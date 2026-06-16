@@ -1,7 +1,9 @@
 'use client'
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
+import { uploadMenuItemImage, deleteMenuItemImage } from '@/lib/supabaseStorage'
+import { saveMenu, subscribeMenu } from '@/lib/firestore'
 
-type MenuItem = { id: string; name: string; desc: string; price: number; available: boolean }
+type MenuItem = { id: string; name: string; desc: string; price: number; available: boolean; imageUrl?: string }
 type Category = { id: string; name: string; emoji: string; items: MenuItem[] }
 
 const DEFAULT_MENU: Category[] = [
@@ -26,18 +28,56 @@ const DEFAULT_MENU: Category[] = [
 
 const EMOJIS = ['🥗','🍲','🍽','🍕','🥤','🍰','🥩','🍣','🍜','🧆','🥘','🫕']
 
+// This must match the slug used in the table URL e.g. /demo-restaurant/table/1
+const RESTAURANT_ID = 'demo-restaurant'
+
 export default function MenuPage() {
   const [categories, setCategories] = useState<Category[]>(DEFAULT_MENU)
   const [activeCategory, setActiveCategory] = useState(DEFAULT_MENU[0].id)
   const [editingItem, setEditingItem] = useState<MenuItem | null>(null)
-  const [editingCat, setEditingCat] = useState<string | null>(null)
   const [showAddItem, setShowAddItem] = useState(false)
   const [showAddCat, setShowAddCat] = useState(false)
-  const [newItem, setNewItem] = useState({ name: '', desc: '', price: '' })
+  const [newItem, setNewItem] = useState({ name: '', desc: '', price: '', imageUrl: '' })
   const [newCat, setNewCat] = useState({ name: '', emoji: '🍽' })
+  const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [uploadingNew, setUploadingNew] = useState(false)
+  const [uploadingEdit, setUploadingEdit] = useState(false)
+  const [loading, setLoading] = useState(true)
 
-  const activeCat = categories.find(c => c.id === activeCategory)!
+  const newImageInputRef = useRef<HTMLInputElement>(null)
+  const editImageInputRef = useRef<HTMLInputElement>(null)
+
+  // Load menu from Firestore on mount
+  useEffect(() => {
+    const unsubscribe = subscribeMenu(RESTAURANT_ID, (firestoreMenu) => {
+      if (firestoreMenu && firestoreMenu.length > 0) {
+        setCategories(firestoreMenu as Category[])
+        setActiveCategory(prev =>
+          firestoreMenu.some(c => c.id === prev) ? prev : firestoreMenu[0].id
+        )
+      }
+      setLoading(false)
+    })
+    return () => unsubscribe()
+  }, [])
+
+  const activeCat = categories.find(c => c.id === activeCategory) || categories[0]
+
+  // Save entire menu to Firestore
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      await saveMenu(RESTAURANT_ID, categories as any)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (err) {
+      console.error('Save failed', err)
+      alert('Помилка збереження. Перевірте підключення.')
+    } finally {
+      setSaving(false)
+    }
+  }
 
   const saveItem = () => {
     if (!editingItem) return
@@ -46,24 +86,25 @@ export default function MenuPage() {
       items: c.items.map(i => i.id === editingItem.id ? editingItem : i)
     })))
     setEditingItem(null)
-    flashSaved()
   }
 
   const addItem = () => {
     if (!newItem.name || !newItem.price) return
     const item: MenuItem = {
       id: 'i' + Date.now(), name: newItem.name,
-      desc: newItem.desc, price: Number(newItem.price), available: true
+      desc: newItem.desc, price: Number(newItem.price), available: true,
+      imageUrl: newItem.imageUrl || undefined,
     }
     setCategories(cats => cats.map(c =>
       c.id === activeCategory ? {...c, items: [...c.items, item]} : c
     ))
-    setNewItem({ name: '', desc: '', price: '' })
+    setNewItem({ name: '', desc: '', price: '', imageUrl: '' })
     setShowAddItem(false)
-    flashSaved()
   }
 
   const deleteItem = (catId: string, itemId: string) => {
+    const item = categories.find(c => c.id === catId)?.items.find(i => i.id === itemId)
+    if (item?.imageUrl) deleteMenuItemImage(item.imageUrl)
     setCategories(cats => cats.map(c =>
       c.id === catId ? {...c, items: c.items.filter(i => i.id !== itemId)} : c
     ))
@@ -86,7 +127,44 @@ export default function MenuPage() {
     setShowAddCat(false)
   }
 
-  const flashSaved = () => { setSaved(true); setTimeout(() => setSaved(false), 2000) }
+  const handleNewImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploadingNew(true)
+    try {
+      const url = await uploadMenuItemImage(RESTAURANT_ID, file)
+      setNewItem(prev => ({ ...prev, imageUrl: url }))
+    } catch (err) {
+      console.error('Upload failed', err)
+      alert('Не вдалося завантажити фото. Перевірте налаштування Supabase Storage.')
+    } finally {
+      setUploadingNew(false)
+    }
+  }
+
+  const handleEditImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file || !editingItem) return
+    setUploadingEdit(true)
+    try {
+      if (editingItem.imageUrl) deleteMenuItemImage(editingItem.imageUrl)
+      const url = await uploadMenuItemImage(RESTAURANT_ID, file)
+      setEditingItem({ ...editingItem, imageUrl: url })
+    } catch (err) {
+      console.error('Upload failed', err)
+      alert('Не вдалося завантажити фото.')
+    } finally {
+      setUploadingEdit(false)
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-[#9A9490] text-sm">Завантаження меню...</div>
+      </div>
+    )
+  }
 
   return (
     <div className="px-6 py-8 max-w-6xl mx-auto">
@@ -96,9 +174,9 @@ export default function MenuPage() {
           <h1 className="font-display text-3xl font-bold mb-1">Меню</h1>
           <p className="text-[#6B6560] text-sm">{categories.reduce((s,c) => s + c.items.length, 0)} позицій у {categories.length} категоріях</p>
         </div>
-        <button onClick={flashSaved}
-          className={`px-6 py-2.5 rounded-xl font-semibold text-sm transition-all ${saved ? 'bg-[#3A7D58] text-white' : 'bg-[#C17F3B] hover:bg-[#9A6328] text-white'}`}>
-          {saved ? '✓ Збережено' : 'Зберегти'}
+        <button onClick={handleSave} disabled={saving}
+          className={`px-6 py-2.5 rounded-xl font-semibold text-sm transition-all disabled:opacity-60 ${saved ? 'bg-[#3A7D58] text-white' : 'bg-[#C17F3B] hover:bg-[#9A6328] text-white'}`}>
+          {saving ? 'Збереження...' : saved ? '✓ Збережено' : 'Зберегти'}
         </button>
       </div>
 
@@ -145,7 +223,11 @@ export default function MenuPage() {
               {activeCat.items.map(item => (
                 <div key={item.id}
                   className={`bg-white border rounded-2xl p-4 flex items-center gap-4 transition-all ${item.available ? 'border-[#E8E0D4]' : 'border-[#E8E0D4] opacity-60'}`}>
-                  <div className="w-10 h-10 bg-[#FAF8F5] rounded-xl flex items-center justify-center text-xl shrink-0">{activeCat.emoji}</div>
+                  {item.imageUrl ? (
+                    <img src={item.imageUrl} alt={item.name} className="w-12 h-12 rounded-xl object-cover shrink-0" />
+                  ) : (
+                    <div className="w-12 h-12 bg-[#FAF8F5] rounded-xl flex items-center justify-center text-2xl shrink-0">{activeCat.emoji}</div>
+                  )}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-0.5">
                       <span className="font-semibold text-sm">{item.name}</span>
@@ -155,10 +237,8 @@ export default function MenuPage() {
                   </div>
                   <div className="font-bold text-[#C17F3B] shrink-0">{item.price} ₴</div>
                   <div className="flex items-center gap-1 shrink-0">
-                    {/* Toggle available */}
                     <button onClick={() => toggleAvailable(activeCat.id, item.id)}
-                      title={item.available ? 'Зробити недоступним' : 'Зробити доступним'}
-                      className={`w-8 h-8 rounded-lg text-sm transition-colors ${item.available ? 'bg-[#E6F4ED] text-[#3A7D58] hover:bg-[#D0EDE1]' : 'bg-gray-100 text-gray-400 hover:bg-gray-200'}`}>
+                      className={`w-8 h-8 rounded-lg text-sm transition-colors ${item.available ? 'bg-[#E6F4ED] text-[#3A7D58]' : 'bg-gray-100 text-gray-400'}`}>
                       {item.available ? '✓' : '✗'}
                     </button>
                     <button onClick={() => setEditingItem(item)}
@@ -180,6 +260,22 @@ export default function MenuPage() {
             <h3 className="font-display text-xl font-bold mb-5">Нова страва</h3>
             <div className="space-y-4">
               <div>
+                <label className="block text-sm font-medium mb-1.5">Фото страви</label>
+                <input ref={newImageInputRef} type="file" accept="image/*" className="hidden" onChange={handleNewImageSelect} />
+                {newItem.imageUrl ? (
+                  <div className="relative w-full h-36 rounded-xl overflow-hidden border border-[#E8E0D4]">
+                    <img src={newItem.imageUrl} alt="Прев'ю" className="w-full h-full object-cover" />
+                    <button onClick={() => setNewItem(p => ({...p, imageUrl: ''}))}
+                      className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/50 text-white text-sm flex items-center justify-center">✕</button>
+                  </div>
+                ) : (
+                  <button onClick={() => newImageInputRef.current?.click()} disabled={uploadingNew}
+                    className="w-full h-36 border-2 border-dashed border-[#E8E0D4] rounded-xl flex flex-col items-center justify-center gap-2 text-[#9A9490] hover:border-[#C17F3B] hover:text-[#C17F3B] transition-colors disabled:opacity-60">
+                    {uploadingNew ? <span className="text-sm">Завантаження...</span> : <><span className="text-2xl">📷</span><span className="text-sm font-medium">Завантажити фото</span></>}
+                  </button>
+                )}
+              </div>
+              <div>
                 <label className="block text-sm font-medium mb-1.5">Назва *</label>
                 <input value={newItem.name} onChange={e => setNewItem({...newItem, name: e.target.value})}
                   className="w-full px-4 py-3 border border-[#E8E0D4] rounded-xl focus:border-[#C17F3B] focus:outline-none text-sm"
@@ -198,10 +294,10 @@ export default function MenuPage() {
                   placeholder="149" />
               </div>
               <div className="flex gap-3 pt-2">
-                <button onClick={() => setShowAddItem(false)}
-                  className="flex-1 py-3 border border-[#E8E0D4] rounded-xl text-sm font-medium hover:bg-[#FAF8F5]">Скасувати</button>
+                <button onClick={() => { setShowAddItem(false); setNewItem({ name: '', desc: '', price: '', imageUrl: '' }) }}
+                  className="flex-1 py-3 border border-[#E8E0D4] rounded-xl text-sm font-medium">Скасувати</button>
                 <button onClick={addItem}
-                  className="flex-1 py-3 bg-[#C17F3B] text-white rounded-xl text-sm font-semibold hover:bg-[#9A6328]">Додати</button>
+                  className="flex-1 py-3 bg-[#C17F3B] text-white rounded-xl text-sm font-semibold">Додати</button>
               </div>
             </div>
           </div>
@@ -214,6 +310,26 @@ export default function MenuPage() {
           <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl">
             <h3 className="font-display text-xl font-bold mb-5">Редагувати страву</h3>
             <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-1.5">Фото страви</label>
+                <input ref={editImageInputRef} type="file" accept="image/*" className="hidden" onChange={handleEditImageSelect} />
+                {editingItem.imageUrl ? (
+                  <div className="relative w-full h-36 rounded-xl overflow-hidden border border-[#E8E0D4]">
+                    <img src={editingItem.imageUrl} alt="Прев'ю" className="w-full h-full object-cover" />
+                    <button onClick={() => { deleteMenuItemImage(editingItem.imageUrl!); setEditingItem({...editingItem, imageUrl: undefined}) }}
+                      className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/50 text-white text-sm flex items-center justify-center">✕</button>
+                    <button onClick={() => editImageInputRef.current?.click()} disabled={uploadingEdit}
+                      className="absolute bottom-2 right-2 px-3 py-1.5 rounded-lg bg-black/50 text-white text-xs font-medium">
+                      {uploadingEdit ? '...' : 'Замінити'}
+                    </button>
+                  </div>
+                ) : (
+                  <button onClick={() => editImageInputRef.current?.click()} disabled={uploadingEdit}
+                    className="w-full h-36 border-2 border-dashed border-[#E8E0D4] rounded-xl flex flex-col items-center justify-center gap-2 text-[#9A9490] hover:border-[#C17F3B] hover:text-[#C17F3B] transition-colors disabled:opacity-60">
+                    {uploadingEdit ? <span className="text-sm">Завантаження...</span> : <><span className="text-2xl">📷</span><span className="text-sm font-medium">Завантажити фото</span></>}
+                  </button>
+                )}
+              </div>
               <div>
                 <label className="block text-sm font-medium mb-1.5">Назва</label>
                 <input value={editingItem.name} onChange={e => setEditingItem({...editingItem, name: e.target.value})}
@@ -231,9 +347,9 @@ export default function MenuPage() {
               </div>
               <div className="flex gap-3 pt-2">
                 <button onClick={() => setEditingItem(null)}
-                  className="flex-1 py-3 border border-[#E8E0D4] rounded-xl text-sm font-medium hover:bg-[#FAF8F5]">Скасувати</button>
+                  className="flex-1 py-3 border border-[#E8E0D4] rounded-xl text-sm font-medium">Скасувати</button>
                 <button onClick={saveItem}
-                  className="flex-1 py-3 bg-[#C17F3B] text-white rounded-xl text-sm font-semibold hover:bg-[#9A6328]">Зберегти</button>
+                  className="flex-1 py-3 bg-[#C17F3B] text-white rounded-xl text-sm font-semibold">Зберегти</button>
               </div>
             </div>
           </div>

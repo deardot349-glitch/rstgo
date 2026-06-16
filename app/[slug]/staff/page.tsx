@@ -1,12 +1,9 @@
 'use client'
-import { useState, useEffect, useCallback, use } from 'react'
-import { supabase } from '@/lib/supabase'
+import { useState, useEffect, use } from 'react'
+import { subscribeOrders, subscribeWaiterCalls, markOrderDone, resolveWaiterCall } from '@/lib/firestore'
+import type { OrderDoc, WaiterCallDoc } from '@/lib/firestore'
 
 const STAFF_PIN = '1234'
-
-type OrderItem = { id: string; name: string; price: number; emoji: string; guest: string }
-type Order = { id: string; table_number: number; items: OrderItem[]; total: number; done: boolean; created_at: string }
-type WaiterCall = { id: string; table_number: number; guest_name: string; created_at: string; resolved: boolean }
 
 export default function StaffPage({ params: paramsPromise }: { params: Promise<{ slug: string }> }) {
   const { slug } = use(paramsPromise)
@@ -15,51 +12,21 @@ export default function StaffPage({ params: paramsPromise }: { params: Promise<{
   const [pinInput, setPinInput] = useState('')
   const [pinError, setPinError] = useState(false)
   const [tab, setTab] = useState<'orders'|'waiter'>('orders')
-  const [orders, setOrders] = useState<Order[]>([])
-  const [waiterCalls, setWaiterCalls] = useState<WaiterCall[]>([])
+  const [orders, setOrders] = useState<OrderDoc[]>([])
+  const [waiterCalls, setWaiterCalls] = useState<WaiterCallDoc[]>([])
   const [filterDone, setFilterDone] = useState(false)
-
-  const loadOrders = useCallback(async () => {
-    const { data } = await supabase
-      .from('orders_rt')
-      .select('*')
-      .eq('restaurant_slug', slug)
-      .order('created_at', { ascending: false })
-    if (data) setOrders(data as Order[])
-  }, [slug])
-
-  const loadWaiterCalls = useCallback(async () => {
-    const { data } = await supabase
-      .from('waiter_calls_rt')
-      .select('*')
-      .eq('restaurant_slug', slug)
-      .eq('resolved', false)
-      .order('created_at', { ascending: false })
-    if (data) setWaiterCalls(data as WaiterCall[])
-  }, [slug])
 
   useEffect(() => {
     if (!authenticated) return
-    loadOrders()
-    loadWaiterCalls()
 
-    const ordersChannel = supabase
-      .channel(`staff_orders_${slug}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders_rt', filter: `restaurant_slug=eq.${slug}` },
-        () => loadOrders())
-      .subscribe()
-
-    const waiterChannel = supabase
-      .channel(`staff_waiter_${slug}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'waiter_calls_rt', filter: `restaurant_slug=eq.${slug}` },
-        () => loadWaiterCalls())
-      .subscribe()
+    const unsubOrders = subscribeOrders(slug, setOrders)
+    const unsubWaiter = subscribeWaiterCalls(slug, setWaiterCalls)
 
     return () => {
-      supabase.removeChannel(ordersChannel)
-      supabase.removeChannel(waiterChannel)
+      unsubOrders()
+      unsubWaiter()
     }
-  }, [authenticated, loadOrders, loadWaiterCalls, slug])
+  }, [authenticated, slug])
 
   const tryPin = () => {
     if (pinInput === STAFF_PIN) {
@@ -72,19 +39,23 @@ export default function StaffPage({ params: paramsPromise }: { params: Promise<{
   }
 
   const markDone = async (orderId: string) => {
-    await supabase.from('orders_rt').update({ done: true }).eq('id', orderId)
+    await markOrderDone(orderId)
     setOrders(prev => prev.map(o => o.id === orderId ? {...o, done: true} : o))
   }
 
   const dismissWaiter = async (callId: string) => {
-    await supabase.from('waiter_calls_rt').update({ resolved: true }).eq('id', callId)
+    await resolveWaiterCall(callId)
     setWaiterCalls(prev => prev.filter(c => c.id !== callId))
   }
 
   const pendingOrders = orders.filter(o => !o.done)
   const doneOrders = orders.filter(o => o.done)
   const displayOrders = filterDone ? doneOrders : pendingOrders
-  const formatTime = (iso: string) => new Date(iso).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' })
+  const formatTime = (ts: { toDate?: () => Date } | string | undefined) => {
+    if (!ts) return ''
+    const date = typeof ts === 'string' ? new Date(ts) : ts.toDate ? ts.toDate() : new Date()
+    return date.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' })
+  }
 
   if (!authenticated) {
     return (
@@ -158,7 +129,7 @@ export default function StaffPage({ params: paramsPromise }: { params: Promise<{
             ) : (
               <div className="space-y-3">
                 {displayOrders.map(order => {
-                  const grouped: Record<string, OrderItem & {qty:number}> = {}
+                  const grouped: Record<string, typeof order.items[0] & {qty:number}> = {}
                   order.items.forEach(item => {
                     const key = `${item.guest}__${item.id}`
                     if (!grouped[key]) grouped[key] = {...item, qty: 0}

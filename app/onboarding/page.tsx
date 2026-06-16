@@ -25,10 +25,9 @@ export default function OnboardingNFCPage() {
   const [slug, setSlug] = useState('your-restaurant')
   const [tableCount, setTableCount] = useState(5)
   const [baseUrl, setBaseUrl] = useState('')
-  const [copiedTable, setCopiedTable] = useState<number | null>(null)
-  const [nfcReady, setNfcReady] = useState<Set<number>>(new Set())
-  const [step, setStep] = useState<'intro' | 'setup' | 'done'>('intro')
-  const [animating, setAnimating] = useState(false)
+  const [step, setStep] = useState<'intro' | 'shipping' | 'done'>('intro')
+  const [address, setAddress] = useState('')
+  const [addressSaved, setAddressSaved] = useState(false)
 
   useEffect(() => {
     setBaseUrl(window.location.origin)
@@ -41,21 +40,14 @@ export default function OnboardingNFCPage() {
 
   const tableUrl = (n: number) => `${baseUrl}/${slug}/table/${n}`
 
-  const copyUrl = async (n: number) => {
-    await navigator.clipboard.writeText(tableUrl(n))
-    setCopiedTable(n)
-    setTimeout(() => setCopiedTable(null), 2000)
-    // Mark as "ready"
-    setNfcReady(prev => new Set([...prev, n]))
-  }
-
-  const markReady = (n: number) => {
-    setNfcReady(prev => new Set([...prev, n]))
-  }
-
-  const allReady = nfcReady.size === tableCount
   const dailySavingsSec = SAVINGS_PER_ORDER_SECONDS * AVG_ORDERS_PER_DAY
   const monthlySavingsMin = Math.round((dailySavingsSec * 30) / 60)
+
+  const saveAddress = () => {
+    if (!address.trim()) return
+    setAddressSaved(true)
+    setTimeout(() => setStep('done'), 900)
+  }
 
   return (
     <div className="min-h-screen bg-[#FAF8F5]">
@@ -68,16 +60,16 @@ export default function OnboardingNFCPage() {
           <span className="font-bold text-lg" style={{ fontFamily: 'Playfair Display,serif' }}>RSTGO</span>
         </div>
         <div className="flex-1 flex items-center gap-2 mx-4">
-          {(['intro', 'setup', 'done'] as const).map((s, i) => (
+          {(['intro', 'shipping', 'done'] as const).map((s, i) => (
             <div key={s} className="flex items-center gap-2 flex-1">
               <div className={`w-6 h-6 rounded-full text-xs font-bold flex items-center justify-center shrink-0 transition-all ${
                 step === s ? 'bg-[#C17F3B] text-white' :
-                (['intro', 'setup', 'done'].indexOf(step) > i) ? 'bg-[#3A7D58] text-white' : 'bg-[#E8E0D4] text-[#9A9490]'
+                (['intro', 'shipping', 'done'].indexOf(step) > i) ? 'bg-[#3A7D58] text-white' : 'bg-[#E8E0D4] text-[#9A9490]'
               }`}>
-                {(['intro', 'setup', 'done'].indexOf(step) > i) ? '✓' : i + 1}
+                {(['intro', 'shipping', 'done'].indexOf(step) > i) ? '✓' : i + 1}
               </div>
               <div className={`h-1 flex-1 rounded-full last:hidden transition-all ${
-                ['intro', 'setup', 'done'].indexOf(step) > i ? 'bg-[#3A7D58]' : 'bg-[#E8E0D4]'
+                ['intro', 'shipping', 'done'].indexOf(step) > i ? 'bg-[#3A7D58]' : 'bg-[#E8E0D4]'
               }`} />
             </div>
           ))}
@@ -90,13 +82,14 @@ export default function OnboardingNFCPage() {
         {/* INTRO STEP */}
         {step === 'intro' && (
           <div className="text-center">
-            <div className="w-20 h-20 bg-[#F5E9D8] rounded-3xl flex items-center justify-center text-4xl mx-auto mb-6">📲</div>
+            <div className="w-20 h-20 bg-[#F5E9D8] rounded-3xl flex items-center justify-center text-4xl mx-auto mb-6">📦</div>
             <h1 style={{ fontFamily: 'Playfair Display,serif' }} className="text-3xl font-bold mb-3">
-              Налаштуйте NFC для столів
+              Ми надсилаємо NFC-теги для ваших столів
             </h1>
             <p className="text-[#6B6560] mb-8 text-lg">
-              Кожен стіл отримає унікальне посилання. Запишіть його на NFC-тег або роздрукуйте QR —
-              гості торкнуться телефоном і одразу відкриється ваше меню. Жодних додатків.
+              Кожен стіл отримає унікальне посилання на ваше меню, вже записане на готовий NFC-тег.
+              Ми друкуємо та надсилаємо їх поштою — вам залишається лише наклеїти на стіл.
+              Гості торкнуться телефоном і одразу відкриється ваше меню. Жодних додатків.
             </p>
 
             {/* Time savings stats */}
@@ -127,12 +120,12 @@ export default function OnboardingNFCPage() {
             </div>
 
             <div className="bg-[#F5E9D8] border border-[#E8C99A] rounded-2xl p-5 mb-8 text-left">
-              <div className="font-semibold text-[#9A6328] mb-3">Що вам знадобиться:</div>
+              <div className="font-semibold text-[#9A6328] mb-3">Як це працює:</div>
               <div className="space-y-2">
                 {[
-                  { icon: '📦', text: `NFC NTAG213 наклейки — ${tableCount} штук (AliExpress, ~5–15 ₴/шт)` },
-                  { icon: '📱', text: 'Додаток NFC Tools або NFC TagWriter by NXP (безкоштовно)' },
-                  { icon: '⏱', text: `Приблизно ${Math.max(5, tableCount * 2)} хвилин вашого часу` },
+                  { icon: '🏷️', text: `Ми готуємо ${tableCount} NFC-наклейок — по одній на кожен стіл, посилання вже записане` },
+                  { icon: '📮', text: 'Надсилаємо поштою на адресу вашого закладу — зазвичай 3–5 робочих днів' },
+                  { icon: '📍', text: 'Наклейте теги на столи відповідно до номерів — і все готово' },
                 ].map((item, i) => (
                   <div key={i} className="flex items-start gap-3">
                     <span className="text-xl shrink-0">{item.icon}</span>
@@ -142,99 +135,60 @@ export default function OnboardingNFCPage() {
               </div>
             </div>
 
-            <button onClick={() => setStep('setup')}
+            <button onClick={() => setStep('shipping')}
               className="w-full py-4 bg-[#C17F3B] hover:bg-[#9A6328] text-white font-semibold rounded-2xl text-lg transition-colors">
-              Розпочати налаштування →
+              Вказати адресу доставки →
             </button>
             <button onClick={() => { window.location.href = '/dashboard' }}
               className="w-full py-3 mt-3 text-sm text-[#9A9490] hover:text-[#6B6560]">
-              Пропустити, налаштую пізніше
+              Пропустити, вкажу пізніше в Налаштуваннях
             </button>
           </div>
         )}
 
-        {/* SETUP STEP */}
-        {step === 'setup' && (
+        {/* SHIPPING STEP */}
+        {step === 'shipping' && (
           <div>
             <div className="mb-6">
               <h1 style={{ fontFamily: 'Playfair Display,serif' }} className="text-2xl font-bold mb-1">
-                NFC для «{restaurantName}»
+                Куди надіслати NFC-теги для «{restaurantName}»
               </h1>
               <p className="text-[#6B6560] text-sm">
-                Скопіюйте посилання кожного столу та запишіть на відповідний NFC-тег
+                Вкажіть адресу закладу — ми надрукуємо та надішлемо {tableCount} NFC-наклейок (по одній на кожен стіл)
               </p>
             </div>
 
-            {/* Instruction card */}
-            <div className="bg-white border border-[#E8E0D4] rounded-2xl p-4 mb-5">
-              <div className="font-semibold text-sm mb-2">📲 Як записати на NFC-тег:</div>
-              <ol className="text-xs text-[#6B6560] space-y-1 list-decimal list-inside">
-                <li>Відкрийте <strong>NFC Tools</strong> → «Write» → «Add a record» → «URL / URI»</li>
-                <li>Вставте скопійоване посилання → «Write» → Торкніться тегу телефоном</li>
-                <li>Готово! Наклейте тег на стіл і відмітьте ✓ нижче</li>
-              </ol>
+            <div className="bg-white border border-[#E8E0D4] rounded-2xl p-5 mb-5">
+              <label className="block text-sm font-medium mb-1.5">Адреса доставки *</label>
+              <input value={address} onChange={e => setAddress(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && saveAddress()}
+                className="w-full px-4 py-3 border border-[#E8E0D4] rounded-xl focus:border-[#C17F3B] focus:outline-none text-sm mb-2"
+                placeholder="вул. Хрещатик, 1, Київ, 01001" />
+              <p className="text-xs text-[#9A9490]">Ви завжди можете змінити цю адресу пізніше в Налаштуваннях</p>
             </div>
 
-            {/* Progress bar */}
-            <div className="bg-white border border-[#E8E0D4] rounded-2xl p-4 mb-5">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium">Готовність NFC</span>
-                <span className="text-sm font-bold text-[#C17F3B]">{nfcReady.size} / {tableCount}</span>
-              </div>
-              <div className="h-2 bg-[#F0EAE2] rounded-full overflow-hidden">
-                <div className="h-full bg-[#C17F3B] rounded-full transition-all duration-500"
-                  style={{ width: `${(nfcReady.size / tableCount) * 100}%` }} />
-              </div>
-              {allReady && (
-                <div className="flex items-center gap-2 mt-2 text-[#3A7D58] text-sm font-semibold">
-                  <span>✅</span> Всі столи готові!
-                </div>
-              )}
-            </div>
-
-            {/* Table list */}
-            <div className="grid sm:grid-cols-2 gap-3 mb-6">
-              {Array.from({ length: tableCount }, (_, i) => i + 1).map(n => {
-                const url = tableUrl(n)
-                const isCopied = copiedTable === n
-                const isReady = nfcReady.has(n)
-                return (
-                  <div key={n} className={`bg-white border-2 rounded-2xl p-4 transition-all ${isReady ? 'border-[#3A7D58]' : 'border-[#E8E0D4]'}`}>
-                    <div className="flex items-center gap-3 mb-3">
-                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold shrink-0 transition-all ${isReady ? 'bg-[#E6F4ED] text-[#3A7D58]' : 'bg-[#F5E9D8] text-[#C17F3B]'}`}>
-                        {isReady ? '✓' : n}
-                      </div>
-                      <div className="flex-1">
-                        <div className="font-semibold text-sm">Стіл №{n}</div>
-                        <div className="text-xs text-[#9A9490]">
-                          {isReady ? 'NFC готовий ✓' : 'Очікує налаштування'}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="bg-[#FAF8F5] rounded-xl px-3 py-2 mb-3">
-                      <div className="text-xs font-mono text-[#9A9490] truncate">{url || '...'}</div>
-                    </div>
-                    <div className="flex gap-2">
-                      <button onClick={() => copyUrl(n)}
-                        className={`flex-1 py-2 rounded-xl text-xs font-semibold transition-all ${isCopied ? 'bg-[#3A7D58] text-white' : 'bg-[#F5E9D8] text-[#9A6328] hover:bg-[#EDD5B3]'}`}>
-                        {isCopied ? '✓ Скопійовано!' : '📋 Копіювати'}
-                      </button>
-                      <button onClick={() => markReady(n)}
-                        className={`px-3 py-2 rounded-xl text-xs font-semibold transition-all ${isReady ? 'bg-[#E6F4ED] text-[#3A7D58]' : 'bg-[#F5F3EF] text-[#9A9490] hover:bg-[#E8E0D4]'}`}>
-                        {isReady ? '✓' : 'Відмітити'}
-                      </button>
+            {/* What you'll receive */}
+            <div className="bg-[#FAF8F5] border border-[#E8E0D4] rounded-2xl p-5 mb-6">
+              <div className="font-semibold text-sm mb-3">📦 Що ви отримаєте:</div>
+              <div className="grid sm:grid-cols-2 gap-2">
+                {Array.from({ length: tableCount }, (_, i) => i + 1).map(n => (
+                  <div key={n} className="flex items-center gap-3 bg-white border border-[#E8E0D4] rounded-xl px-3 py-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-[#F5E9D8] text-[#C17F3B] flex items-center justify-center font-bold text-xs shrink-0">{n}</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium text-xs">NFC-тег · Стіл №{n}</div>
+                      <div className="text-[10px] text-[#9A9490] font-mono truncate">{tableUrl(n)}</div>
                     </div>
                   </div>
-                )
-              })}
+                ))}
+              </div>
             </div>
 
             <div className="flex gap-3">
               <button onClick={() => setStep('intro')}
                 className="px-5 py-3.5 border border-[#E8E0D4] bg-white rounded-xl text-sm font-medium">← Назад</button>
-              <button onClick={() => setStep('done')}
-                className="flex-1 py-3.5 bg-[#C17F3B] hover:bg-[#9A6328] text-white font-semibold rounded-xl transition-colors">
-                {allReady ? 'Завершити налаштування ✓' : 'Продовжити →'}
+              <button onClick={saveAddress} disabled={!address.trim()}
+                className="flex-1 py-3.5 bg-[#C17F3B] hover:bg-[#9A6328] text-white font-semibold rounded-xl transition-colors disabled:opacity-50">
+                {addressSaved ? '✓ Збережено' : 'Підтвердити адресу →'}
               </button>
             </div>
           </div>
@@ -245,12 +199,11 @@ export default function OnboardingNFCPage() {
           <div className="text-center">
             <div className="w-24 h-24 bg-[#E6F4ED] rounded-full flex items-center justify-center text-5xl mx-auto mb-6">🎉</div>
             <h1 style={{ fontFamily: 'Playfair Display,serif' }} className="text-3xl font-bold mb-3">
-              Ви готові до роботи!
+              Готово! Ваші NFC-теги в дорозі
             </h1>
             <p className="text-[#6B6560] mb-8">
-              {nfcReady.size === tableCount
-                ? `Всі ${tableCount} столів налаштовані. Гості можуть замовляти торкнувшись телефоном до тегу.`
-                : `${nfcReady.size} зі ${tableCount} столів налаштовано. Решту можна додати пізніше в розділі «Столи».`}
+              Ми надрукуємо {tableCount} NFC-наклейок з посиланнями на ваше меню та надішлемо на вказану адресу.
+              Зазвичай це займає 3–5 робочих днів. Поки чекаєте — налаштуйте меню.
             </p>
 
             {/* Summary stats */}
