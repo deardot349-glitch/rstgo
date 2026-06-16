@@ -1,12 +1,11 @@
 'use client'
-import { useState, useEffect, use } from 'react'
+import { useState, useEffect, use, useRef } from 'react'
 import {
   subscribeTableSessions, upsertTableSession, deleteTableSession,
   createOrder, createWaiterCall, subscribeMenu,
 } from '@/lib/firestore'
 import type { MenuCategoryDoc } from '@/lib/firestore'
 
-// Fallback/demo menu used until the restaurant's real menu loads from Firestore
 const DEFAULT_MENU: MenuCategoryDoc[] = [
   { id: 'c1', name: 'Салати', emoji: '🥗', items: [
     { id: 's1', name: 'Грецький салат', desc: 'Томати, огірок, маслини, фета', price: 149, available: true },
@@ -71,30 +70,32 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
   const [showRemoveModal, setShowRemoveModal] = useState<string|null>(null)
   const [showLeaveModal, setShowLeaveModal] = useState(false)
   const [saving, setSaving] = useState(false)
-  // Keep track of the last submitted order so the bill doesn't disappear
   const [lastOrder, setLastOrder] = useState<OrderRecord | null>(null)
-  // Tooltip for locked buttons
-  const [showCartTooltip, setShowCartTooltip] = useState(false)
-  const [showWaiterTooltip, setShowWaiterTooltip] = useState(false)
+  const [search, setSearch] = useState('')
+  const [showSearch, setShowSearch] = useState(false)
+  const [expandedItem, setExpandedItem] = useState<string|null>(null)
+  const [cartBump, setCartBump] = useState(false)
+  const searchRef = useRef<HTMLInputElement>(null)
+  const catRefs = useRef<Record<string, HTMLDivElement|null>>({})
 
-  // Subscribe to live table sessions (carts) for this table
   useEffect(() => {
-    const unsubscribe = subscribeTableSessions(slug, tableNum, (data) => {
-      setSessions(data)
-    })
-    return () => unsubscribe()
+    const unsub = subscribeTableSessions(slug, tableNum, setSessions)
+    return () => unsub()
   }, [slug, tableNum])
 
-  // Subscribe to the restaurant's live menu (falls back to DEFAULT_MENU)
   useEffect(() => {
-    const unsubscribe = subscribeMenu(slug, (categories) => {
-      if (categories && categories.length > 0) {
-        setMenu(categories)
-        setActiveCat(prev => categories.some(c => c.id === prev) ? prev : categories[0].id)
+    const unsub = subscribeMenu(slug, (cats) => {
+      if (cats && cats.length > 0) {
+        setMenu(cats)
+        setActiveCat(prev => cats.some(c => c.id === prev) ? prev : cats[0].id)
       }
     })
-    return () => unsubscribe()
+    return () => unsub()
   }, [slug])
+
+  useEffect(() => {
+    if (showSearch) searchRef.current?.focus()
+  }, [showSearch])
 
   const allItems = () => menu.flatMap(c => c.items)
   const findItem = (itemId: string) => {
@@ -106,10 +107,7 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
   const myCart: CartItem[] = sessions.find(s => s.guest_name === currentUser)?.cart || []
   const getQty = (id: string) => myCart.filter(i => i.id === id).length
   const myCartCount = myCart.length
-
-  // Cart and waiter button are only accessible if the user has added items
-  const cartAccessible = myCartCount > 0
-  const waiterAccessible = myCartCount > 0
+  const myCartTotal = myCart.reduce((s, i) => s + i.price, 0)
 
   const saveCart = async (cart: CartItem[]) => {
     setSaving(true)
@@ -129,6 +127,7 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
     const { item, cat } = findItem(itemId)
     const newCart = [...myCart, { id: item.id, name: item.name, price: item.price, emoji: cat.emoji }]
     setSessions(prev => prev.map(s => s.guest_name === currentUser ? {...s, cart: newCart} : s))
+    setCartBump(true); setTimeout(() => setCartBump(false), 300)
     await saveCart(newCart)
   }
 
@@ -137,6 +136,7 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
     if (delta === 1) {
       const { item, cat } = findItem(itemId)
       newCart.push({ id: item.id, name: item.name, price: item.price, emoji: cat.emoji })
+      setCartBump(true); setTimeout(() => setCartBump(false), 300)
     } else {
       const idx = newCart.map(i => i.id).lastIndexOf(itemId)
       if (idx !== -1) newCart.splice(idx, 1)
@@ -160,61 +160,85 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
   const callWaiter = async () => {
     await createWaiterCall(slug, tableNum, currentUser || 'Гість')
     setShowWaiterModal(false)
-    alert(`✅ Офіціант повідомлений! Очікуйте біля столу №${tableId}`)
+    alert(`✅ Офіціант вже йде до столу №${tableId}!`)
   }
 
   const submitOrder = async () => {
     const activeGuests = sessions.filter(s => s.cart.length > 0)
     if (!activeGuests.length) return
-
     const items = activeGuests.flatMap(s => s.cart.map(item => ({ ...item, guest: s.guest_name })))
     const total = items.reduce((s, i) => s + i.price, 0)
-
-    // Save order record BEFORE clearing carts so success screen can show it
-    const orderRecord: OrderRecord = {
-      items,
-      total,
-      submittedAt: new Date().toISOString(),
-    }
+    const orderRecord: OrderRecord = { items, total, submittedAt: new Date().toISOString() }
     setLastOrder(orderRecord)
-
     await createOrder(slug, tableNum, items, total)
     await Promise.all(activeGuests.map(s => upsertTableSession(slug, tableNum, s.guest_name, [])))
     setSessions(prev => prev.map(s => ({...s, cart: []})))
     setScreen('success')
   }
 
+  const scrollToCategory = (catId: string) => {
+    setActiveCat(catId)
+    setSearch('')
+    setShowSearch(false)
+    catRefs.current[catId]?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  // Search results across all categories
+  const searchResults = search.trim()
+    ? menu.flatMap(cat => cat.items
+        .filter(i => i.available && (
+          i.name.toLowerCase().includes(search.toLowerCase()) ||
+          i.desc.toLowerCase().includes(search.toLowerCase())
+        ))
+        .map(i => ({ ...i, catEmoji: cat.emoji, catName: cat.name, catId: cat.id }))
+      )
+    : []
+
   const otherGuests = sessions.filter(s => s.guest_name !== currentUser)
-  const activeCatData = menu.find(c => c.id === activeCat) || menu[0]
 
   return (
-    <div className="min-h-screen bg-[#FAF8F5] font-sans">
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=DM+Sans:wght@300;400;500;600;700&display=swap'); body{font-family:'DM Sans',sans-serif;}`}</style>
+    <div className="min-h-screen bg-[#FAF8F5]">
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=DM+Sans:wght@300;400;500;600;700&display=swap');
+        body { font-family: 'DM Sans', sans-serif; }
+        ::-webkit-scrollbar { display: none; }
+        * { -webkit-tap-highlight-color: transparent; }
+      `}</style>
 
+      {/* ── NAME SCREEN ── */}
       {screen === 'name' && (
-        <div className="min-h-screen flex items-center justify-center px-6 bg-white">
+        <div className="min-h-screen flex flex-col items-center justify-center px-6 bg-white">
           <div className="w-full max-w-sm text-center">
-            <div className="w-16 h-16 bg-[#C17F3B] rounded-2xl flex items-center justify-center text-white font-bold text-2xl mx-auto mb-4">R</div>
-            <div className="text-xl font-bold mb-1" style={{fontFamily:'Playfair Display,serif'}}>RSTGO</div>
-            <div className="text-xs text-[#9A9490] uppercase tracking-widest mb-6">Ресторан · Стіл №{tableId}</div>
-            <div className="inline-flex items-center gap-2 bg-[#F5E9D8] text-[#9A6328] rounded-full px-4 py-2 text-sm font-semibold mb-8">🪑 Стіл №{tableId}</div>
-            <div style={{fontFamily:'Playfair Display,serif'}} className="text-2xl font-bold mb-2">Як вас звати?</div>
-            <p className="text-[#6B6560] text-sm mb-6">Введіть ім&apos;я — без реєстрації</p>
+            <div className="w-20 h-20 bg-[#C17F3B] rounded-3xl flex items-center justify-center text-white font-bold text-3xl mx-auto mb-4 shadow-lg shadow-[#C17F3B]/30">R</div>
+            <div className="text-2xl font-bold mb-1" style={{fontFamily:'Playfair Display,serif'}}>RSTGO</div>
+            <div className="inline-flex items-center gap-1.5 bg-[#F5E9D8] text-[#9A6328] rounded-full px-4 py-1.5 text-sm font-semibold mb-8">🪑 Стіл №{tableId}</div>
+
+            <div style={{fontFamily:'Playfair Display,serif'}} className="text-3xl font-bold mb-2">Як вас звати?</div>
+            <p className="text-[#6B6560] text-sm mb-6">Введіть ім'я щоб почати замовляти — без реєстрації</p>
+
             <input value={nameInput} onChange={e => setNameInput(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && enterMenu()}
-              className="w-full px-4 py-3.5 border-2 border-[#E8E0D4] rounded-2xl text-center text-lg focus:border-[#C17F3B] focus:outline-none mb-3"
-              placeholder="Ваше ім'я..." maxLength={24} />
-            <button onClick={enterMenu}
-              className="w-full py-3.5 bg-[#C17F3B] hover:bg-[#9A6328] text-white font-semibold rounded-2xl transition-colors">
-              Переглянути меню →
+              className="w-full px-5 py-4 border-2 border-[#E8E0D4] rounded-2xl text-center text-xl focus:border-[#C17F3B] focus:outline-none mb-3 font-medium"
+              placeholder="Ваше ім'я..." maxLength={24} autoFocus />
+            <button onClick={enterMenu} disabled={!nameInput.trim()}
+              className="w-full py-4 bg-[#C17F3B] hover:bg-[#9A6328] text-white font-bold rounded-2xl transition-all text-lg shadow-lg shadow-[#C17F3B]/25 disabled:opacity-40">
+              Відкрити меню →
             </button>
+
             {otherGuests.length > 0 && (
               <div className="mt-8 pt-6 border-t border-[#E8E0D4]">
                 <p className="text-xs text-[#9A9490] uppercase tracking-wider mb-3">Вже за столом</p>
                 <div className="flex flex-wrap gap-2 justify-center">
                   {otherGuests.map(s => {
                     const c = gColor(s.guest_name)
-                    return <span key={s.guest_name} style={{background:c.bg,color:c.fg}} className="px-3 py-1 rounded-full text-sm font-semibold">👤 {s.guest_name}</span>
+                    return (
+                      <span key={s.guest_name} style={{background:c.bg,color:c.fg}}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold">
+                        <span className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold" style={{background:c.fg,color:'white'}}>{ini(s.guest_name)}</span>
+                        {s.guest_name}
+                        {s.cart.length > 0 && <span className="opacity-60 text-xs">· {s.cart.length} страв</span>}
+                      </span>
+                    )
                   })}
                 </div>
               </div>
@@ -223,130 +247,248 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
         </div>
       )}
 
-      {screen === 'menu' && activeCatData && (
+      {/* ── MENU SCREEN ── */}
+      {screen === 'menu' && (
         <div className="flex flex-col min-h-screen">
-          <div className="sticky top-0 z-40 bg-white border-b border-[#E8E0D4] px-4 py-3 flex items-center gap-3">
-            <div style={{background:gColor(currentUser).fg}} className="w-9 h-9 rounded-full flex items-center justify-center text-white font-bold text-sm shrink-0">{ini(currentUser)}</div>
-            <div className="flex-1 min-w-0">
-              <div className="font-semibold text-sm">{currentUser} {saving && <span className="text-xs text-[#C17F3B]">●</span>}</div>
-              <div className="text-xs text-[#9A9490]">Стіл №{tableId} · {sessions.length} {sessions.length === 1 ? 'гість' : 'гостей'}</div>
-            </div>
-          </div>
-          <div className="sticky top-[61px] z-30 bg-white border-b border-[#E8E0D4]">
-            <div className="flex gap-2 px-4 py-2.5 overflow-x-auto" style={{scrollbarWidth:'none'}}>
-              {menu.map(c => (
-                <button key={c.id} onClick={() => setActiveCat(c.id)}
-                  className={`shrink-0 px-4 py-1.5 rounded-full text-xs font-semibold transition-all ${activeCat === c.id ? 'bg-[#C17F3B] text-white' : 'bg-[#F5F3EF] text-[#6B6560]'}`}>
-                  {c.emoji} {c.name}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="flex-1 p-4 pb-28">
-            <div>
-              <div style={{fontFamily:'Playfair Display,serif'}} className="text-lg font-bold mb-3">{activeCatData.emoji} {activeCatData.name}</div>
-              <div className="grid grid-cols-2 gap-3 mb-6">
-                {activeCatData.items.filter(i => i.available).map(item => {
-                  const qty = getQty(item.id)
-                  return (
-                    <div key={item.id} className={`bg-white rounded-2xl p-3 border relative ${qty > 0 ? 'border-[#C17F3B] shadow-sm' : 'border-[#E8E0D4]'}`}>
-                      {qty > 0 && <div className="absolute top-2 right-2 w-5 h-5 bg-[#3A7D58] rounded-full text-white text-xs flex items-center justify-center font-bold z-10">{qty}</div>}
-                      {item.imageUrl ? (
-                        <img src={item.imageUrl} alt={item.name} className="w-full h-24 object-cover rounded-xl mb-2" />
-                      ) : (
-                        <div className="text-3xl mb-2">{activeCatData.emoji}</div>
-                      )}
-                      <div className="font-semibold text-xs mb-1 leading-tight">{item.name}</div>
-                      <div className="text-[10px] text-[#9A9490] mb-2 leading-tight">{item.desc}</div>
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-sm text-[#C17F3B]">{item.price} ₴</span>
-                        <button onClick={() => addToCart(item.id)} className="w-7 h-7 rounded-full bg-[#C17F3B] text-white flex items-center justify-center hover:bg-[#9A6328]">+</button>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          </div>
 
-          {/* Bottom bar — always visible, but waiter + cart locked if cart empty */}
-          <div className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t border-[#E8E0D4] px-4 py-3 flex gap-2">
-            {/* Waiter button */}
-            <div className="relative">
-              <button
-                onClick={() => {
-                  if (waiterAccessible) {
-                    setShowWaiterModal(true)
-                  } else {
-                    setShowWaiterTooltip(true)
-                    setTimeout(() => setShowWaiterTooltip(false), 2500)
-                  }
-                }}
-                className={`w-12 h-12 rounded-2xl text-xl flex items-center justify-center border shrink-0 transition-all ${
-                  waiterAccessible
-                    ? 'bg-[#FDECEA] text-[#C0392B] border-[#F5C6C2]'
-                    : 'bg-[#F5F3EF] text-[#C0C0C0] border-[#E8E0D4] cursor-not-allowed opacity-50'
-                }`}>
+          {/* Top header */}
+          <div className="sticky top-0 z-40 bg-white/95 backdrop-blur border-b border-[#E8E0D4]">
+            <div className="px-4 pt-3 pb-2 flex items-center gap-3">
+              <div style={{background:gColor(currentUser).fg}} className="w-9 h-9 rounded-full flex items-center justify-center text-white font-bold text-sm shrink-0">{ini(currentUser)}</div>
+              <div className="flex-1 min-w-0">
+                <div className="font-semibold text-sm leading-tight">{currentUser} {saving && <span className="text-[#C17F3B] text-xs">●</span>}</div>
+                <div className="text-xs text-[#9A9490]">Стіл №{tableId} · {sessions.length} {sessions.length === 1 ? 'гість' : sessions.length < 5 ? 'гості' : 'гостей'}</div>
+              </div>
+              <button onClick={() => { setShowSearch(!showSearch); setSearch('') }}
+                className={`w-9 h-9 rounded-xl flex items-center justify-center text-lg border transition-all ${showSearch ? 'bg-[#C17F3B] border-[#C17F3B] text-white' : 'bg-[#F5F3EF] border-[#E8E0D4] text-[#6B6560]'}`}>
+                🔍
+              </button>
+              <button onClick={() => setShowWaiterModal(true)}
+                className="w-9 h-9 rounded-xl bg-[#FDECEA] border border-[#F5C6C2] flex items-center justify-center text-lg">
                 🔔
               </button>
-              {showWaiterTooltip && (
-                <div className="absolute bottom-14 left-1/2 -translate-x-1/2 bg-[#1C1A18] text-white text-xs rounded-xl px-3 py-2 whitespace-nowrap shadow-lg">
-                  Спочатку додайте щось до кошика
-                  <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-[#1C1A18]" />
-                </div>
-              )}
             </div>
 
-            {/* Cart button */}
-            <div className="relative flex-1">
-              <button
-                onClick={() => {
-                  if (cartAccessible) {
-                    setCartTab('cart')
-                    setScreen('cart')
-                  } else {
-                    setShowCartTooltip(true)
-                    setTimeout(() => setShowCartTooltip(false), 2500)
-                  }
-                }}
-                className={`w-full h-12 font-semibold rounded-2xl flex items-center justify-between px-4 transition-all ${
-                  cartAccessible
-                    ? 'bg-[#1C1A18] text-white'
-                    : 'bg-[#E8E0D4] text-[#9A9490] cursor-not-allowed'
-                }`}>
-                <span>Кошик</span>
-                <span className={`text-xs font-bold px-2.5 py-1 rounded-full transition-all ${
-                  myCartCount > 0 ? 'bg-[#C17F3B] text-white' : 'bg-white/30 text-white/50'
-                }`}>
-                  {myCartCount > 0 ? myCartCount : '0'}
-                </span>
-              </button>
-              {showCartTooltip && (
-                <div className="absolute bottom-14 left-1/2 -translate-x-1/2 bg-[#1C1A18] text-white text-xs rounded-xl px-3 py-2 whitespace-nowrap shadow-lg">
-                  Додайте страви, щоб відкрити кошик
-                  <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-[#1C1A18]" />
+            {/* Search bar */}
+            {showSearch && (
+              <div className="px-4 pb-2">
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[#9A9490] text-sm">🔍</span>
+                  <input ref={searchRef} value={search} onChange={e => setSearch(e.target.value)}
+                    className="w-full pl-9 pr-9 py-2.5 bg-[#F5F3EF] border border-[#E8E0D4] rounded-xl text-sm focus:border-[#C17F3B] focus:outline-none"
+                    placeholder="Пошук по меню..." />
+                  {search && (
+                    <button onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#9A9490] text-lg">✕</button>
+                  )}
                 </div>
+              </div>
+            )}
+
+            {/* Category tabs */}
+            {!showSearch && (
+              <div className="flex gap-2 px-4 pb-2.5 overflow-x-auto" style={{scrollbarWidth:'none'}}>
+                {menu.map(c => (
+                  <button key={c.id} onClick={() => scrollToCategory(c.id)}
+                    className={`shrink-0 px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all ${activeCat === c.id ? 'bg-[#C17F3B] text-white shadow-sm' : 'bg-[#F5F3EF] text-[#6B6560]'}`}>
+                    {c.emoji} {c.name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Search results */}
+          {showSearch && search && (
+            <div className="flex-1 px-4 py-4 pb-32">
+              {searchResults.length === 0 ? (
+                <div className="text-center py-16 text-[#9A9490]">
+                  <div className="text-5xl mb-3">🔍</div>
+                  <p className="font-medium">Нічого не знайдено</p>
+                  <p className="text-sm mt-1">Спробуйте інший запит</p>
+                </div>
+              ) : (
+                <>
+                  <p className="text-xs text-[#9A9490] mb-3">Знайдено {searchResults.length} страв</p>
+                  <div className="space-y-2">
+                    {searchResults.map(item => {
+                      const qty = getQty(item.id)
+                      return (
+                        <div key={item.id} className={`bg-white rounded-2xl border flex items-center gap-3 p-3 ${qty > 0 ? 'border-[#C17F3B]' : 'border-[#E8E0D4]'}`}>
+                          {item.imageUrl ? (
+                            <img src={item.imageUrl} alt={item.name} className="w-14 h-14 rounded-xl object-cover shrink-0" />
+                          ) : (
+                            <div className="w-14 h-14 rounded-xl bg-[#F5F3EF] flex items-center justify-center text-2xl shrink-0">{item.catEmoji}</div>
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <div className="text-xs text-[#9A9490] mb-0.5">{item.catEmoji} {item.catName}</div>
+                            <div className="font-semibold text-sm leading-tight">{item.name}</div>
+                            <div className="text-xs text-[#9A9490] mt-0.5 leading-tight truncate">{item.desc}</div>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <div className="font-bold text-[#C17F3B] mb-1.5">{item.price} ₴</div>
+                            {qty === 0 ? (
+                              <button onClick={() => addToCart(item.id)}
+                                className="w-8 h-8 rounded-full bg-[#C17F3B] text-white flex items-center justify-center text-lg font-bold hover:bg-[#9A6328]">+</button>
+                            ) : (
+                              <div className="flex items-center gap-1">
+                                <button onClick={() => changeQty(item.id, -1)} className="w-7 h-7 rounded-full bg-[#F5F3EF] border border-[#E8E0D4] flex items-center justify-center font-bold">−</button>
+                                <span className="w-4 text-center text-sm font-bold">{qty}</span>
+                                <button onClick={() => changeQty(item.id, 1)} className="w-7 h-7 rounded-full bg-[#C17F3B] text-white flex items-center justify-center font-bold">+</button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </>
               )}
             </div>
+          )}
+
+          {/* Full menu — all categories scrollable */}
+          {(!showSearch || !search) && (
+            <div className="flex-1 px-4 py-4 pb-32 space-y-8"
+              onScroll={(e) => {
+                // Update active category based on scroll position
+                const scrollTop = (e.target as HTMLElement).scrollTop + 160
+                for (const cat of menu) {
+                  const el = catRefs.current[cat.id]
+                  if (el && el.offsetTop <= scrollTop) setActiveCat(cat.id)
+                }
+              }}>
+              {menu.map(cat => (
+                <div key={cat.id} ref={el => { catRefs.current[cat.id] = el }}>
+                  <div className="flex items-center gap-2 mb-3">
+                    <span className="text-2xl">{cat.emoji}</span>
+                    <h2 style={{fontFamily:'Playfair Display,serif'}} className="text-xl font-bold">{cat.name}</h2>
+                    <span className="text-xs text-[#9A9490] bg-[#F5F3EF] px-2 py-0.5 rounded-full">{cat.items.filter(i=>i.available).length}</span>
+                  </div>
+
+                  <div className="space-y-2">
+                    {cat.items.filter(i => i.available).map(item => {
+                      const qty = getQty(item.id)
+                      const isExpanded = expandedItem === item.id
+
+                      return (
+                        <div key={item.id}
+                          className={`bg-white rounded-2xl border overflow-hidden transition-all ${qty > 0 ? 'border-[#C17F3B] shadow-sm shadow-[#C17F3B]/10' : 'border-[#E8E0D4]'}`}>
+                          <div className="flex gap-3 p-3">
+                            {/* Image or emoji */}
+                            <button onClick={() => setExpandedItem(isExpanded ? null : item.id)} className="shrink-0">
+                              {item.imageUrl ? (
+                                <img src={item.imageUrl} alt={item.name}
+                                  className="w-20 h-20 rounded-xl object-cover" />
+                              ) : (
+                                <div className="w-20 h-20 rounded-xl bg-[#F5F3EF] flex items-center justify-center text-4xl">{cat.emoji}</div>
+                              )}
+                            </button>
+
+                            {/* Info */}
+                            <div className="flex-1 min-w-0 flex flex-col justify-between">
+                              <div>
+                                <div className="font-semibold text-sm leading-tight mb-1">{item.name}</div>
+                                <div className={`text-xs text-[#9A9490] leading-relaxed ${isExpanded ? '' : 'line-clamp-2'}`}>{item.desc}</div>
+                                {item.desc && item.desc.length > 60 && (
+                                  <button onClick={() => setExpandedItem(isExpanded ? null : item.id)}
+                                    className="text-xs text-[#C17F3B] font-medium mt-0.5">
+                                    {isExpanded ? 'Згорнути' : 'Детальніше'}
+                                  </button>
+                                )}
+                              </div>
+                              <div className="flex items-center justify-between mt-2">
+                                <span className="font-bold text-[#C17F3B]">{item.price} ₴</span>
+                                {qty === 0 ? (
+                                  <button onClick={() => addToCart(item.id)}
+                                    className="flex items-center gap-1 bg-[#C17F3B] text-white px-3 py-1.5 rounded-xl text-xs font-bold hover:bg-[#9A6328] active:scale-95 transition-all">
+                                    + Додати
+                                  </button>
+                                ) : (
+                                  <div className="flex items-center gap-2 bg-[#F5F3EF] rounded-xl p-1">
+                                    <button onClick={() => changeQty(item.id, -1)}
+                                      className="w-7 h-7 rounded-lg bg-white border border-[#E8E0D4] flex items-center justify-center font-bold text-sm shadow-sm active:scale-95 transition-all">−</button>
+                                    <span className="w-5 text-center font-bold text-sm">{qty}</span>
+                                    <button onClick={() => changeQty(item.id, 1)}
+                                      className="w-7 h-7 rounded-lg bg-[#C17F3B] text-white flex items-center justify-center font-bold text-sm shadow-sm active:scale-95 transition-all">+</button>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+
+              {/* Bottom spacer */}
+              <div className="h-4" />
+            </div>
+          )}
+
+          {/* Floating bottom bar */}
+          <div className="fixed bottom-0 left-0 right-0 z-50 px-4 pb-5 pt-2 bg-gradient-to-t from-[#FAF8F5] via-[#FAF8F5]/95 to-transparent">
+            <button
+              onClick={() => { if (myCartCount > 0) { setCartTab('cart'); setScreen('cart') } }}
+              className={`w-full h-14 rounded-2xl flex items-center justify-between px-5 transition-all duration-200 ${
+                myCartCount > 0
+                  ? `bg-[#1C1A18] text-white shadow-xl shadow-black/20 ${cartBump ? 'scale-105' : 'scale-100'}`
+                  : 'bg-[#E8E0D4] text-[#9A9490]'
+              }`}>
+              <div className="flex items-center gap-2">
+                <span className="text-lg">🛒</span>
+                <span className="font-semibold">
+                  {myCartCount > 0 ? `${myCartCount} ${myCartCount === 1 ? 'страва' : myCartCount < 5 ? 'страви' : 'страв'}` : 'Кошик порожній'}
+                </span>
+              </div>
+              {myCartCount > 0 && (
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-[#C17F3B]">{myCartTotal} ₴</span>
+                  <span className="bg-[#C17F3B] text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center">{myCartCount}</span>
+                </div>
+              )}
+            </button>
           </div>
         </div>
       )}
 
+      {/* ── CART SCREEN ── */}
       {screen === 'cart' && (
         <div className="flex flex-col min-h-screen">
           <div className="sticky top-0 z-40 bg-white border-b border-[#E8E0D4] px-4 py-3 flex items-center gap-3">
-            <button onClick={() => setScreen('menu')} className="w-9 h-9 rounded-xl bg-[#F5F3EF] border border-[#E8E0D4] flex items-center justify-center text-lg">←</button>
-            <span style={{fontFamily:'Playfair Display,serif'}} className="text-lg font-bold flex-1">Замовлення столу</span>
-            <button onClick={() => setShowWaiterModal(true)} className="px-3 py-1.5 bg-[#FDECEA] text-[#C0392B] rounded-xl text-xs font-semibold border border-[#F5C6C2]">🔔 Офіціант</button>
+            <button onClick={() => setScreen('menu')}
+              className="w-9 h-9 rounded-xl bg-[#F5F3EF] border border-[#E8E0D4] flex items-center justify-center text-lg">←</button>
+            <span style={{fontFamily:'Playfair Display,serif'}} className="text-lg font-bold flex-1">Замовлення</span>
+            <button onClick={() => setShowWaiterModal(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-[#FDECEA] text-[#C0392B] rounded-xl text-xs font-semibold border border-[#F5C6C2]">
+              🔔 Офіціант
+            </button>
           </div>
+
           <div className="flex gap-2 p-4 pb-0">
-            <button onClick={() => setCartTab('cart')} className={`flex-1 py-2.5 rounded-xl text-sm font-semibold ${cartTab==='cart' ? 'bg-[#1C1A18] text-white' : 'bg-white border border-[#E8E0D4] text-[#6B6560]'}`}>🛒 Кошик</button>
-            <button onClick={() => setCartTab('split')} className={`flex-1 py-2.5 rounded-xl text-sm font-semibold ${cartTab==='split' ? 'bg-[#1C1A18] text-white' : 'bg-white border border-[#E8E0D4] text-[#6B6560]'}`}>💳 Розрахунок</button>
+            <button onClick={() => setCartTab('cart')}
+              className={`flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all ${cartTab==='cart' ? 'bg-[#1C1A18] text-white' : 'bg-white border border-[#E8E0D4] text-[#6B6560]'}`}>
+              🛒 Кошик
+            </button>
+            <button onClick={() => setCartTab('split')}
+              className={`flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all ${cartTab==='split' ? 'bg-[#1C1A18] text-white' : 'bg-white border border-[#E8E0D4] text-[#6B6560]'}`}>
+              💳 Розрахунок
+            </button>
           </div>
-          <div className="flex-1 p-4 overflow-y-auto pb-8">
+
+          <div className="flex-1 p-4 overflow-y-auto pb-36">
             {cartTab === 'cart' && (() => {
               const activeGuests = sessions.filter(s => s.cart.length > 0)
-              if (!activeGuests.length) return <div className="text-center py-16 text-[#9A9490]"><div className="text-5xl mb-3">🛒</div><p>Кошик порожній</p></div>
+              if (!activeGuests.length) return (
+                <div className="text-center py-16 text-[#9A9490]">
+                  <div className="text-6xl mb-4">🛒</div>
+                  <p className="font-semibold mb-1">Кошик порожній</p>
+                  <p className="text-sm">Поверніться до меню та оберіть страви</p>
+                  <button onClick={() => setScreen('menu')}
+                    className="mt-5 px-6 py-3 bg-[#C17F3B] text-white rounded-xl font-semibold text-sm">← Меню</button>
+                </div>
+              )
               let allTotal = 0
               return (
                 <>
@@ -358,53 +500,69 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
                       if (!grouped[item.id]) grouped[item.id] = {...item, qty: 0}
                       grouped[item.id].qty++
                     })
+                    const gTotal = Object.values(grouped).reduce((s,i) => s + i.price*i.qty, 0)
+                    allTotal += gTotal
                     return (
-                      <div key={session.guest_name} className="mb-5">
-                        <div className="flex items-center gap-2 mb-2">
-                          <div style={{background:c.bg,color:c.fg}} className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold">{ini(session.guest_name)}</div>
-                          <span className="font-semibold text-sm flex-1">{session.guest_name}</span>
-                          {isMe && <span className="text-xs bg-[#F5E9D8] text-[#9A6328] px-2 py-0.5 rounded-full">це ви</span>}
+                      <div key={session.guest_name} className="mb-4 bg-white border border-[#E8E0D4] rounded-2xl overflow-hidden">
+                        <div className="flex items-center gap-2.5 px-4 py-3 border-b border-[#F0EAE2] bg-[#FAF8F5]">
+                          <div style={{background:c.bg,color:c.fg}} className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold shrink-0">{ini(session.guest_name)}</div>
+                          <span className="font-semibold text-sm flex-1">{session.guest_name}{isMe ? ' (ви)' : ''}</span>
+                          <span className="font-bold text-[#C17F3B]">{gTotal} ₴</span>
                           {isMe
-                            ? <button onClick={() => setShowLeaveModal(true)} className="text-xs text-[#C0392B] bg-[#FDECEA] px-2.5 py-1 rounded-lg border border-[#F5C6C2]">🚪 Покинути</button>
-                            : <button onClick={() => setShowRemoveModal(session.guest_name)} className="text-xs text-[#C0392B] bg-[#FDECEA] px-2.5 py-1 rounded-lg border border-[#F5C6C2]">✕ Видалити</button>
+                            ? <button onClick={() => setShowLeaveModal(true)} className="text-xs text-[#C0392B] bg-[#FDECEA] px-2 py-1 rounded-lg ml-1">🚪</button>
+                            : <button onClick={() => setShowRemoveModal(session.guest_name)} className="text-xs text-[#C0392B] bg-[#FDECEA] px-2 py-1 rounded-lg ml-1">✕</button>
                           }
                         </div>
-                        {Object.values(grouped).map(item => {
-                          const lt = item.price * item.qty; allTotal += lt
-                          return (
-                            <div key={item.id} className="bg-white border border-[#E8E0D4] rounded-xl px-3 py-2.5 mb-1.5 flex items-center gap-3">
-                              <span className="text-xl">{item.emoji}</span>
-                              <div className="flex-1"><div className="font-medium text-sm">{item.name}</div><div className="text-xs text-[#9A9490]">{item.price} ₴ × {item.qty} = {lt} ₴</div></div>
-                              {isMe && (
-                                <div className="flex items-center gap-1.5">
-                                  <button onClick={() => changeQty(item.id, -1)} className="w-6 h-6 rounded-lg bg-[#F5F3EF] border border-[#E8E0D4] text-sm font-bold flex items-center justify-center">−</button>
-                                  <span className="text-sm font-bold w-4 text-center">{item.qty}</span>
-                                  <button onClick={() => changeQty(item.id, 1)} className="w-6 h-6 rounded-lg bg-[#F5F3EF] border border-[#E8E0D4] text-sm font-bold flex items-center justify-center">+</button>
+                        <div className="px-4 py-2">
+                          {Object.values(grouped).map(item => {
+                            const lt = item.price * item.qty
+                            return (
+                              <div key={item.id} className="flex items-center gap-3 py-2.5 border-b border-[#F5F3EF] last:border-0">
+                                <span className="text-xl shrink-0">{item.emoji}</span>
+                                <div className="flex-1 min-w-0">
+                                  <div className="font-medium text-sm">{item.name}</div>
+                                  <div className="text-xs text-[#9A9490]">{item.price} ₴ × {item.qty}</div>
                                 </div>
-                              )}
-                            </div>
-                          )
-                        })}
+                                <div className="flex items-center gap-2 shrink-0">
+                                  {isMe && (
+                                    <div className="flex items-center gap-1">
+                                      <button onClick={() => changeQty(item.id, -1)} className="w-6 h-6 rounded-lg bg-[#F5F3EF] border border-[#E8E0D4] flex items-center justify-center text-sm font-bold">−</button>
+                                      <span className="w-4 text-center text-sm font-bold">{item.qty}</span>
+                                      <button onClick={() => changeQty(item.id, 1)} className="w-6 h-6 rounded-lg bg-[#F5F3EF] border border-[#E8E0D4] flex items-center justify-center text-sm font-bold">+</button>
+                                    </div>
+                                  )}
+                                  <span className="font-semibold text-sm text-[#C17F3B]">{lt} ₴</span>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
                       </div>
                     )
                   })}
-                  <div className="border-t border-[#E8E0D4] pt-4 mb-4">
+
+                  <div className="bg-[#1C1A18] rounded-2xl p-4 mb-4">
                     <div className="flex justify-between items-center">
-                      <span className="text-[#6B6560] text-sm">Разом по столу</span>
-                      <span style={{fontFamily:'Playfair Display,serif'}} className="text-2xl font-bold">{allTotal} <span className="text-[#C17F3B]">₴</span></span>
+                      <span className="text-white/70 text-sm">Разом по столу №{tableId}</span>
+                      <span style={{fontFamily:'Playfair Display,serif'}} className="text-2xl font-bold text-white">{allTotal} <span className="text-[#C17F3B]">₴</span></span>
                     </div>
                   </div>
-                  <button onClick={submitOrder} className="w-full py-4 bg-[#3A7D58] text-white font-semibold rounded-2xl hover:bg-[#2d6444]">✅ Відправити замовлення на кухню</button>
                 </>
               )
             })()}
+
             {cartTab === 'split' && (() => {
               const activeGuests = sessions.filter(s => s.cart.length > 0)
-              if (!activeGuests.length) return <div className="text-center py-16 text-[#9A9490]"><div className="text-5xl mb-3">💳</div><p>Немає страв для розрахунку</p></div>
+              if (!activeGuests.length) return (
+                <div className="text-center py-16 text-[#9A9490]">
+                  <div className="text-6xl mb-4">💳</div>
+                  <p className="font-semibold">Немає страв для розрахунку</p>
+                </div>
+              )
               let grandTotal = 0
               return (
                 <>
-                  <p className="text-sm text-[#6B6560] mb-4">Хто скільки платить:</p>
+                  <p className="text-sm text-[#6B6560] mb-4">Окремий рахунок для кожного:</p>
                   {activeGuests.map(session => {
                     const c = gColor(session.guest_name)
                     const isMe = session.guest_name === currentUser
@@ -413,158 +571,142 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
                     const gTotal = Object.values(grouped).reduce((s,i) => s + i.price*i.qty, 0)
                     grandTotal += gTotal
                     return (
-                      <div key={session.guest_name} className="bg-white border border-[#E8E0D4] rounded-2xl p-4 mb-3">
-                        <div className="flex items-center gap-2 mb-3">
+                      <div key={session.guest_name} className="bg-white border border-[#E8E0D4] rounded-2xl overflow-hidden mb-3">
+                        <div className="flex items-center gap-2.5 px-4 py-3 bg-[#FAF8F5] border-b border-[#F0EAE2]">
                           <div style={{background:c.bg,color:c.fg}} className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold">{ini(session.guest_name)}</div>
                           <span className="font-semibold flex-1">{session.guest_name}{isMe ? ' (ви)' : ''}</span>
                           <span style={{fontFamily:'Playfair Display,serif'}} className="text-xl font-bold text-[#C17F3B]">{gTotal} ₴</span>
                         </div>
-                        {Object.values(grouped).map(item => (
-                          <div key={item.id} className="flex justify-between text-sm py-1 border-b border-[#F0EAE2] last:border-0">
-                            <span>{item.emoji} {item.name}{item.qty > 1 ? ` ×${item.qty}` : ''}</span>
-                            <span className="font-medium text-[#6B6560]">{item.price*item.qty} ₴</span>
-                          </div>
-                        ))}
+                        <div className="px-4 py-2">
+                          {Object.values(grouped).map(item => (
+                            <div key={item.id} className="flex justify-between items-center py-2 border-b border-[#F5F3EF] last:border-0 text-sm">
+                              <span className="text-[#1C1A18]">{item.emoji} {item.name}{item.qty > 1 ? ` ×${item.qty}` : ''}</span>
+                              <span className="font-medium text-[#6B6560]">{item.price*item.qty} ₴</span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     )
                   })}
-                  <div className="bg-[#F5F3EF] rounded-2xl p-4 mt-2">
-                    <div className="flex justify-between font-bold"><span>Загальний рахунок</span><span className="text-[#C17F3B]">{grandTotal} ₴</span></div>
+                  <div className="bg-[#F5F3EF] rounded-2xl p-4">
+                    <div className="flex justify-between font-bold text-lg">
+                      <span>Загальний рахунок</span>
+                      <span className="text-[#C17F3B]">{grandTotal} ₴</span>
+                    </div>
                   </div>
                 </>
               )
             })()}
           </div>
+
+          {/* Submit order button */}
+          {sessions.some(s => s.cart.length > 0) && (
+            <div className="fixed bottom-0 left-0 right-0 z-50 px-4 pb-5 pt-2 bg-gradient-to-t from-[#FAF8F5] via-[#FAF8F5]/95 to-transparent">
+              <button onClick={submitOrder}
+                className="w-full h-14 bg-[#3A7D58] hover:bg-[#2d6444] text-white font-bold rounded-2xl text-base shadow-xl shadow-[#3A7D58]/30 active:scale-98 transition-all">
+                ✅ Відправити замовлення на кухню
+              </button>
+            </div>
+          )}
         </div>
       )}
 
-      {screen === 'success' && lastOrder && (
+      {/* ── SUCCESS SCREEN ── */}
+      {screen === 'success' && (
         <div className="min-h-screen bg-[#FAF8F5] flex flex-col">
-          {/* Success header */}
-          <div className="bg-white border-b border-[#E8E0D4] px-4 py-4 flex items-center gap-3 sticky top-0 z-40">
+          <div className="bg-white border-b border-[#E8E0D4] px-4 py-3 flex items-center gap-3 sticky top-0 z-40">
             <button onClick={() => setScreen('menu')} className="w-9 h-9 rounded-xl bg-[#F5F3EF] border border-[#E8E0D4] flex items-center justify-center text-lg">←</button>
             <div style={{fontFamily:'Playfair Display,serif'}} className="text-lg font-bold flex-1">Рахунок</div>
-            <div className="flex items-center gap-2 bg-[#E6F4ED] text-[#3A7D58] rounded-full px-3 py-1 text-xs font-semibold">✅ Прийнято</div>
+            <div className="flex items-center gap-1.5 bg-[#E6F4ED] text-[#3A7D58] rounded-full px-3 py-1 text-xs font-semibold">✅ Прийнято</div>
           </div>
 
           <div className="flex-1 px-4 py-6 max-w-md mx-auto w-full">
-            {/* Confirmation banner */}
-            <div className="bg-[#E6F4ED] border border-[#B8DEC9] rounded-2xl p-5 mb-6 text-center">
-              <div className="text-3xl mb-2">✅</div>
-              <div style={{fontFamily:'Playfair Display,serif'}} className="text-xl font-bold text-[#2E7D54] mb-1">Замовлення прийнято!</div>
-              <p className="text-[#3A7D58] text-sm">Ваше замовлення вже на кухні. Стіл №{tableId}.</p>
+            <div className="bg-[#E6F4ED] border border-[#B8DEC9] rounded-2xl p-5 mb-5 text-center">
+              <div className="text-4xl mb-2">🎉</div>
+              <div style={{fontFamily:'Playfair Display,serif'}} className="text-xl font-bold text-[#2E7D54] mb-1">Замовлення на кухні!</div>
+              <p className="text-[#3A7D58] text-sm">Стіл №{tableId} · Очікуйте, зараз принесемо</p>
             </div>
 
-            {/* The actual bill — doesn't disappear */}
-            <div className="bg-white border border-[#E8E0D4] rounded-2xl overflow-hidden mb-5">
-              <div className="px-5 py-4 border-b border-[#F0EAE2] flex items-center justify-between">
-                <span style={{fontFamily:'Playfair Display,serif'}} className="font-bold text-lg">Ваш рахунок</span>
-                <span className="text-xs text-[#9A9490]">
-                  {new Date(lastOrder.submittedAt).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' })}
-                </span>
-              </div>
-
-              {/* Group by guest */}
-              {(() => {
-                const byGuest: Record<string, Array<CartItem & { guest: string }>> = {}
-                lastOrder.items.forEach(item => {
-                  if (!byGuest[item.guest]) byGuest[item.guest] = []
-                  byGuest[item.guest].push(item)
-                })
-                return Object.entries(byGuest).map(([guest, items]) => {
-                  const grouped: Record<string, CartItem & {qty:number}> = {}
-                  items.forEach(i => {
-                    if (!grouped[i.id]) grouped[i.id] = {...i, qty: 0}
-                    grouped[i.id].qty++
-                  })
-                  const gTotal = Object.values(grouped).reduce((s, i) => s + i.price * i.qty, 0)
-                  const c = gColor(guest)
-                  const isMe = guest === currentUser
-                  return (
-                    <div key={guest} className="px-5 py-3 border-b border-[#F9F5F0] last:border-0">
-                      <div className="flex items-center gap-2 mb-2">
-                        <div style={{background:c.bg,color:c.fg}} className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold">{ini(guest)}</div>
-                        <span className="text-sm font-semibold">{guest}{isMe ? ' (ви)' : ''}</span>
-                        <span className="ml-auto font-bold text-[#C17F3B]">{gTotal} ₴</span>
-                      </div>
-                      {Object.values(grouped).map(item => (
-                        <div key={item.id} className="flex justify-between text-sm py-1 text-[#6B6560]">
-                          <span>{item.emoji} {item.name}{item.qty > 1 ? ` ×${item.qty}` : ''}</span>
-                          <span>{item.price * item.qty} ₴</span>
+            {lastOrder && (
+              <div className="bg-white border border-[#E8E0D4] rounded-2xl overflow-hidden mb-5">
+                <div className="px-5 py-3.5 border-b border-[#F0EAE2] flex justify-between items-center bg-[#FAF8F5]">
+                  <span style={{fontFamily:'Playfair Display,serif'}} className="font-bold text-lg">Ваш рахунок</span>
+                  <span className="text-xs text-[#9A9490]">{new Date(lastOrder.submittedAt).toLocaleTimeString('uk-UA', {hour:'2-digit',minute:'2-digit'})}</span>
+                </div>
+                {(() => {
+                  const byGuest: Record<string, Array<CartItem & {guest:string}>> = {}
+                  lastOrder.items.forEach(item => { if (!byGuest[item.guest]) byGuest[item.guest] = []; byGuest[item.guest].push(item) })
+                  return Object.entries(byGuest).map(([guest, items]) => {
+                    const grouped: Record<string, CartItem & {qty:number}> = {}
+                    items.forEach(i => { if (!grouped[i.id]) grouped[i.id] = {...i, qty:0}; grouped[i.id].qty++ })
+                    const gTotal = Object.values(grouped).reduce((s,i) => s + i.price*i.qty, 0)
+                    const c = gColor(guest)
+                    return (
+                      <div key={guest} className="px-5 py-3 border-b border-[#F9F5F0] last:border-0">
+                        <div className="flex items-center gap-2 mb-2">
+                          <div style={{background:c.bg,color:c.fg}} className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold">{ini(guest)}</div>
+                          <span className="text-sm font-semibold flex-1">{guest}{guest===currentUser?' (ви)':''}</span>
+                          <span className="font-bold text-[#C17F3B]">{gTotal} ₴</span>
                         </div>
-                      ))}
-                    </div>
-                  )
-                })
-              })()}
-
-              <div className="px-5 py-4 bg-[#FAF8F5]">
-                <div className="flex justify-between items-center">
-                  <span className="font-semibold">Разом по столу №{tableId}</span>
+                        {Object.values(grouped).map(item => (
+                          <div key={item.id} className="flex justify-between text-sm py-1 text-[#6B6560]">
+                            <span>{item.emoji} {item.name}{item.qty>1?` ×${item.qty}`:''}</span>
+                            <span>{item.price*item.qty} ₴</span>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  })
+                })()}
+                <div className="px-5 py-4 bg-[#FAF8F5] flex justify-between items-center">
+                  <span className="font-semibold">Разом</span>
                   <span style={{fontFamily:'Playfair Display,serif'}} className="text-2xl font-bold text-[#C17F3B]">{lastOrder.total} ₴</span>
                 </div>
               </div>
-            </div>
+            )}
 
-            <div className="flex flex-col gap-3">
-              <button onClick={() => setScreen('menu')}
-                className="w-full py-3.5 bg-[#C17F3B] text-white font-semibold rounded-2xl">
-                Додати ще щось
-              </button>
-              <button onClick={() => setShowWaiterModal(true)}
-                className="w-full py-3.5 bg-[#FDECEA] text-[#C0392B] font-semibold rounded-2xl border border-[#F5C6C2]">
-                🔔 Викликати офіціанта
-              </button>
+            <div className="space-y-3">
+              <button onClick={() => setScreen('menu')} className="w-full py-3.5 bg-[#C17F3B] text-white font-bold rounded-2xl">← Повернутись до меню</button>
+              <button onClick={() => setShowWaiterModal(true)} className="w-full py-3.5 bg-[#FDECEA] text-[#C0392B] font-semibold rounded-2xl border border-[#F5C6C2]">🔔 Викликати офіціанта</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Fallback success screen if somehow lastOrder is null */}
-      {screen === 'success' && !lastOrder && (
-        <div className="min-h-screen flex items-center justify-center px-6 bg-white text-center">
-          <div>
-            <div className="w-20 h-20 bg-[#E6F4ED] rounded-full flex items-center justify-center text-4xl mx-auto mb-5">✅</div>
-            <div style={{fontFamily:'Playfair Display,serif'}} className="text-3xl font-bold mb-3">Замовлення прийнято!</div>
-            <p className="text-[#6B6560] mb-6">Ваше замовлення вже на кухні.<br />Очікуйте — персонал принесе все до столу №{tableId}.</p>
-            <button onClick={() => setScreen('menu')} className="w-full max-w-xs py-3.5 bg-[#C17F3B] text-white font-semibold rounded-2xl mx-auto block">Додати ще щось</button>
-          </div>
-        </div>
-      )}
-
+      {/* ── MODALS ── */}
       {showWaiterModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-end justify-center">
-          <div className="bg-white rounded-t-3xl p-6 w-full max-w-sm text-center">
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-sm text-center">
             <div className="w-10 h-1 bg-[#E8E0D4] rounded-full mx-auto mb-5" />
-            <div className="text-4xl mb-3">🔔</div>
+            <div className="text-5xl mb-3">🔔</div>
             <div style={{fontFamily:'Playfair Display,serif'}} className="text-xl font-bold mb-2">Викликати офіціанта?</div>
-            <p className="text-[#6B6560] text-sm mb-6">Офіціант підійде до столу №{tableId}.</p>
-            <button onClick={callWaiter} className="w-full py-3.5 bg-[#C17F3B] text-white font-semibold rounded-xl mb-2">Так, викликати</button>
-            <button onClick={() => setShowWaiterModal(false)} className="w-full py-3.5 border border-[#E8E0D4] rounded-xl text-sm">Скасувати</button>
+            <p className="text-[#6B6560] text-sm mb-6">Офіціант підійде до столу №{tableId} протягом хвилини.</p>
+            <button onClick={callWaiter} className="w-full py-3.5 bg-[#C17F3B] text-white font-bold rounded-2xl mb-2 shadow-lg shadow-[#C17F3B]/25">Так, викликати 🔔</button>
+            <button onClick={() => setShowWaiterModal(false)} className="w-full py-3.5 border border-[#E8E0D4] rounded-2xl text-sm text-[#6B6560]">Скасувати</button>
           </div>
         </div>
       )}
       {showRemoveModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-end justify-center">
-          <div className="bg-white rounded-t-3xl p-6 w-full max-w-sm text-center">
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-sm text-center">
             <div className="w-10 h-1 bg-[#E8E0D4] rounded-full mx-auto mb-5" />
-            <div className="text-4xl mb-3">👤</div>
+            <div className="text-5xl mb-3">👤</div>
             <div style={{fontFamily:'Playfair Display,serif'}} className="text-xl font-bold mb-2">Видалити «{showRemoveModal}»?</div>
-            <p className="text-[#6B6560] text-sm mb-6">Усі страви цього гостя будуть видалені.</p>
-            <button onClick={() => removeGuest(showRemoveModal)} className="w-full py-3.5 bg-[#C0392B] text-white font-semibold rounded-xl mb-2">Так, видалити</button>
-            <button onClick={() => setShowRemoveModal(null)} className="w-full py-3.5 border border-[#E8E0D4] rounded-xl text-sm">Скасувати</button>
+            <p className="text-[#6B6560] text-sm mb-6">Усі страви цього гостя будуть видалені з замовлення.</p>
+            <button onClick={() => removeGuest(showRemoveModal)} className="w-full py-3.5 bg-[#C0392B] text-white font-bold rounded-2xl mb-2">Так, видалити</button>
+            <button onClick={() => setShowRemoveModal(null)} className="w-full py-3.5 border border-[#E8E0D4] rounded-2xl text-sm">Скасувати</button>
           </div>
         </div>
       )}
       {showLeaveModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-end justify-center">
-          <div className="bg-white rounded-t-3xl p-6 w-full max-w-sm text-center">
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-sm text-center">
             <div className="w-10 h-1 bg-[#E8E0D4] rounded-full mx-auto mb-5" />
-            <div className="text-4xl mb-3">🚪</div>
+            <div className="text-5xl mb-3">🚪</div>
             <div style={{fontFamily:'Playfair Display,serif'}} className="text-xl font-bold mb-2">Покинути стіл?</div>
-            <p className="text-[#6B6560] text-sm mb-6">Ваші страви будуть видалені. Замовлення інших збережеться.</p>
-            <button onClick={leaveTable} className="w-full py-3.5 bg-[#C0392B] text-white font-semibold rounded-xl mb-2">Так, покинути стіл</button>
-            <button onClick={() => setShowLeaveModal(false)} className="w-full py-3.5 border border-[#E8E0D4] rounded-xl text-sm">Скасувати</button>
+            <p className="text-[#6B6560] text-sm mb-6">Ваші страви будуть видалені. Замовлення інших гостей збережеться.</p>
+            <button onClick={leaveTable} className="w-full py-3.5 bg-[#C0392B] text-white font-bold rounded-2xl mb-2">Так, покинути</button>
+            <button onClick={() => setShowLeaveModal(false)} className="w-full py-3.5 border border-[#E8E0D4] rounded-2xl text-sm">Залишитись</button>
           </div>
         </div>
       )}
