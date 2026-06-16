@@ -130,6 +130,7 @@ export type MenuItemDoc = {
   desc: string
   price: number
   available: boolean
+  imageUrl?: string   // optional — from Supabase Storage
 }
 export type MenuCategoryDoc = {
   id: string
