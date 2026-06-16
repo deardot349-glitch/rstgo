@@ -28,8 +28,8 @@ const DEFAULT_MENU: Category[] = [
 
 const EMOJIS = ['🥗','🍲','🍽','🍕','🥤','🍰','🥩','🍣','🍜','🧆','🥘','🫕']
 
-// This must match the slug used in the table URL e.g. /demo-restaurant/table/1
-const RESTAURANT_ID = 'demo-restaurant'
+// Must match the slug in the table URL e.g. /vatra-restaurant/table/1
+const RESTAURANT_ID = 'vatra-restaurant'
 
 export default function MenuPage() {
   const [categories, setCategories] = useState<Category[]>(DEFAULT_MENU)
@@ -48,7 +48,6 @@ export default function MenuPage() {
   const newImageInputRef = useRef<HTMLInputElement>(null)
   const editImageInputRef = useRef<HTMLInputElement>(null)
 
-  // Load menu from Firestore on mount
   useEffect(() => {
     const unsubscribe = subscribeMenu(RESTAURANT_ID, (firestoreMenu) => {
       if (firestoreMenu && firestoreMenu.length > 0) {
@@ -64,7 +63,6 @@ export default function MenuPage() {
 
   const activeCat = categories.find(c => c.id === activeCategory) || categories[0]
 
-  // Save entire menu to Firestore
   const handleSave = async () => {
     setSaving(true)
     try {
@@ -136,7 +134,7 @@ export default function MenuPage() {
       setNewItem(prev => ({ ...prev, imageUrl: url }))
     } catch (err) {
       console.error('Upload failed', err)
-      alert('Не вдалося завантажити фото. Перевірте налаштування Supabase Storage.')
+      alert('Не вдалося завантажити фото.')
     } finally {
       setUploadingNew(false)
     }
@@ -168,7 +166,6 @@ export default function MenuPage() {
 
   return (
     <div className="px-6 py-8 max-w-6xl mx-auto">
-      {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <div>
           <h1 className="font-display text-3xl font-bold mb-1">Меню</h1>
@@ -181,7 +178,6 @@ export default function MenuPage() {
       </div>
 
       <div className="flex gap-6">
-        {/* Categories sidebar */}
         <div className="w-52 shrink-0">
           <div className="bg-white border border-[#E8E0D4] rounded-2xl p-3 space-y-1">
             {categories.map(cat => (
@@ -201,7 +197,6 @@ export default function MenuPage() {
           </div>
         </div>
 
-        {/* Items */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-semibold text-lg">{activeCat.emoji} {activeCat.name}</h2>
@@ -222,7 +217,7 @@ export default function MenuPage() {
             <div className="space-y-2">
               {activeCat.items.map(item => (
                 <div key={item.id}
-                  className={`bg-white border rounded-2xl p-4 flex items-center gap-4 transition-all ${item.available ? 'border-[#E8E0D4]' : 'border-[#E8E0D4] opacity-60'}`}>
+                  className={`bg-white border rounded-2xl p-4 flex items-center gap-4 ${item.available ? 'border-[#E8E0D4]' : 'border-[#E8E0D4] opacity-60'}`}>
                   {item.imageUrl ? (
                     <img src={item.imageUrl} alt={item.name} className="w-12 h-12 rounded-xl object-cover shrink-0" />
                   ) : (
