@@ -1,13 +1,12 @@
 'use client'
 import { useState, useEffect, use } from 'react'
-import { subscribeOrders, subscribeWaiterCalls, markOrderDone, resolveWaiterCall } from '@/lib/firestore'
-import type { OrderDoc, WaiterCallDoc } from '@/lib/firestore'
+import { subscribeOrders, subscribeWaiterCalls, markOrderDone, resolveWaiterCall } from '@/lib/supabase'
+import type { OrderDoc, WaiterCallDoc } from '@/lib/supabase'
 
 const STAFF_PIN = '1234'
 
 export default function StaffPage({ params: paramsPromise }: { params: Promise<{ slug: string }> }) {
   const { slug } = use(paramsPromise)
-
   const [authenticated, setAuthenticated] = useState(false)
   const [pinInput, setPinInput] = useState('')
   const [pinError, setPinError] = useState(false)
@@ -18,14 +17,9 @@ export default function StaffPage({ params: paramsPromise }: { params: Promise<{
 
   useEffect(() => {
     if (!authenticated) return
-
     const unsubOrders = subscribeOrders(slug, setOrders)
     const unsubWaiter = subscribeWaiterCalls(slug, setWaiterCalls)
-
-    return () => {
-      unsubOrders()
-      unsubWaiter()
-    }
+    return () => { unsubOrders(); unsubWaiter() }
   }, [authenticated, slug])
 
   const tryPin = () => {
@@ -51,21 +45,22 @@ export default function StaffPage({ params: paramsPromise }: { params: Promise<{
   const pendingOrders = orders.filter(o => !o.done)
   const doneOrders = orders.filter(o => o.done)
   const displayOrders = filterDone ? doneOrders : pendingOrders
-  const formatTime = (ts: { toDate?: () => Date } | string | undefined) => {
+
+  const formatTime = (ts: string | undefined) => {
     if (!ts) return ''
-    const date = typeof ts === 'string' ? new Date(ts) : ts.toDate ? ts.toDate() : new Date()
-    return date.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' })
+    return new Date(ts).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' })
   }
 
   if (!authenticated) {
     return (
       <div className="min-h-screen bg-[#1C1A18] flex items-center justify-center px-6">
+        <style>{`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=DM+Sans:wght@400;500;600;700&display=swap'); body{font-family:'DM Sans',sans-serif;}`}</style>
         <div className="w-full max-w-xs text-center">
           <div className="w-16 h-16 bg-[#C17F3B] rounded-2xl flex items-center justify-center text-white font-bold text-2xl mx-auto mb-4">R</div>
           <div className="text-white font-bold text-xl mb-1" style={{fontFamily:'Playfair Display,serif'}}>RSTGO</div>
           <div className="text-white/40 text-xs uppercase tracking-widest mb-8">Панель персоналу</div>
           <div className="text-white/70 text-sm mb-5">Введіть PIN-код персоналу</div>
-          <div className={`flex justify-center gap-4 mb-6 transition-all ${pinError ? 'translate-x-1' : ''}`}>
+          <div className={`flex justify-center gap-4 mb-6 ${pinError ? 'translate-x-1' : ''} transition-all`}>
             {[0,1,2,3].map(i => (
               <div key={i} className={`w-4 h-4 rounded-full border-2 transition-all ${i < pinInput.length ? 'bg-[#C17F3B] border-[#C17F3B] scale-110' : 'border-white/30'}`} />
             ))}
@@ -83,7 +78,7 @@ export default function StaffPage({ params: paramsPromise }: { params: Promise<{
               className="h-14 bg-white/10 hover:bg-white/20 active:scale-95 text-white/60 text-2xl rounded-2xl transition-all flex items-center justify-center">⌫</button>
           </div>
           <button onClick={tryPin} disabled={pinInput.length < 4}
-            className="w-full py-3.5 bg-[#C17F3B] hover:bg-[#9A6328] text-white font-semibold rounded-xl transition-colors disabled:opacity-40">
+            className="w-full py-3.5 bg-[#C17F3B] hover:bg-[#9A6328] text-white font-semibold rounded-xl disabled:opacity-40">
             Увійти
           </button>
         </div>
@@ -125,7 +120,11 @@ export default function StaffPage({ params: paramsPromise }: { params: Promise<{
               <button onClick={() => setFilterDone(true)} className={`px-3 py-1.5 rounded-full text-xs font-semibold ${filterDone ? 'bg-[#C17F3B] text-white' : 'bg-white/8 text-white/50'}`}>Виконані ({doneOrders.length})</button>
             </div>
             {displayOrders.length === 0 ? (
-              <div className="text-center py-16 text-white/30"><div className="text-5xl mb-3">🍽</div><p className="text-sm">{filterDone ? 'Виконаних замовлень немає' : 'Нових замовлень немає'}</p><p className="text-xs mt-1 text-white/20">Оновлюється автоматично</p></div>
+              <div className="text-center py-16 text-white/30">
+                <div className="text-5xl mb-3">🍽</div>
+                <p className="text-sm">{filterDone ? 'Виконаних замовлень немає' : 'Нових замовлень немає'}</p>
+                <p className="text-xs mt-1 text-white/20">Оновлюється автоматично</p>
+              </div>
             ) : (
               <div className="space-y-3">
                 {displayOrders.map(order => {
@@ -140,23 +139,28 @@ export default function StaffPage({ params: paramsPromise }: { params: Promise<{
                       <div className="flex items-center gap-2 mb-3 flex-wrap">
                         <span className="bg-[#C17F3B]/15 text-[#C17F3B] font-bold text-sm px-3 py-1 rounded-lg">🪑 Стіл №{order.table_number}</span>
                         <span className="text-white/40 text-xs">⏰ {formatTime(order.created_at)}</span>
-                        <span className={`ml-auto text-xs font-bold px-2.5 py-1 rounded-full ${order.done ? 'bg-white/10 text-white/40' : 'bg-[#3A7D58] text-white'}`}>{order.done ? '✓ Виконано' : '● НОВЕ'}</span>
+                        <span className={`ml-auto text-xs font-bold px-2.5 py-1 rounded-full ${order.done ? 'bg-white/10 text-white/40' : 'bg-[#3A7D58] text-white animate-pulse'}`}>
+                          {order.done ? '✓ Виконано' : '● НОВЕ'}
+                        </span>
                       </div>
                       <div className="space-y-2 mb-3">
                         {Object.values(grouped).map((item, i) => (
                           <div key={i} className="flex items-start justify-between gap-2">
-                            <div><div className="text-white/40 text-xs mb-0.5">👤 {item.guest}</div><div className="text-white text-sm">{item.emoji} {item.name} ×{item.qty}</div></div>
+                            <div>
+                              <div className="text-white/40 text-xs mb-0.5">👤 {item.guest}</div>
+                              <div className="text-white text-sm">{item.emoji} {item.name} ×{item.qty}</div>
+                            </div>
                             <div className="text-[#C17F3B] font-semibold text-sm shrink-0">{item.price * item.qty} ₴</div>
                           </div>
                         ))}
                       </div>
                       <div className="border-t border-white/8 pt-3 flex justify-between mb-3">
-                        <span className="text-white/40 text-xs">Сума</span>
+                        <span className="text-white/40 text-xs">Сума замовлення</span>
                         <span className="text-white font-bold">{order.total} ₴</span>
                       </div>
                       {!order.done && (
                         <button onClick={() => markDone(order.id)}
-                          className="w-full py-2.5 bg-[#3A7D58]/20 hover:bg-[#3A7D58]/35 text-[#6FCF97] border border-[#3A7D58]/30 rounded-xl text-sm font-semibold transition-colors">
+                          className="w-full py-2.5 bg-[#3A7D58]/20 hover:bg-[#3A7D58]/40 text-[#6FCF97] border border-[#3A7D58]/30 rounded-xl text-sm font-semibold transition-colors">
                           ✅ Страви подано — позначити виконаним
                         </button>
                       )}
@@ -170,20 +174,24 @@ export default function StaffPage({ params: paramsPromise }: { params: Promise<{
 
         {tab === 'waiter' && (
           waiterCalls.length === 0 ? (
-            <div className="text-center py-16 text-white/30"><div className="text-5xl mb-3">🔕</div><p className="text-sm">Активних викликів немає</p></div>
+            <div className="text-center py-16 text-white/30">
+              <div className="text-5xl mb-3">🔕</div>
+              <p className="text-sm">Активних викликів немає</p>
+              <p className="text-xs mt-1 text-white/20">Оновлюється автоматично</p>
+            </div>
           ) : (
             <div className="space-y-3">
               {waiterCalls.map(call => (
                 <div key={call.id} className="bg-[#C0392B]/10 border border-[#C0392B]/25 rounded-2xl p-4 flex items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
-                    <span className="text-2xl">🔔</span>
+                    <span className="text-2xl animate-bounce">🔔</span>
                     <div>
-                      <div className="text-[#F5A89E] font-semibold">Стіл №{call.table_number}</div>
+                      <div className="text-[#F5A89E] font-bold text-lg">Стіл №{call.table_number}</div>
                       <div className="text-[#F5A89E]/60 text-xs">{call.guest_name} · о {formatTime(call.created_at)}</div>
                     </div>
                   </div>
                   <button onClick={() => dismissWaiter(call.id)}
-                    className="shrink-0 bg-[#C0392B]/20 hover:bg-[#C0392B]/35 text-[#F5A89E] border border-[#C0392B]/30 rounded-xl px-3 py-1.5 text-xs font-bold">
+                    className="shrink-0 bg-[#C0392B]/20 hover:bg-[#C0392B]/40 text-[#F5A89E] border border-[#C0392B]/30 rounded-xl px-4 py-2 text-sm font-bold transition-colors">
                     Виконано ✓
                   </button>
                 </div>
