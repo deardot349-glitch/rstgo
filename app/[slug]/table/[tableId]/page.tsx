@@ -6,6 +6,14 @@ import {
 } from '@/lib/supabase'
 import type { MenuCategoryDoc } from '@/lib/supabase'
 
+// ─── Sent order batch (items already sent to kitchen, stays visible) ───
+type SentBatch = {
+  id: string
+  items: Array<CartItem & { qty: number }>
+  total: number
+  sentAt: string
+}
+
 const DEFAULT_MENU: MenuCategoryDoc[] = [
   { id: 'c1', name: 'Салати', emoji: '🥗', items: [
     { id: 's1', name: 'Грецький салат', desc: 'Томати, огірок, маслини, фета', price: 149, available: true },
@@ -53,7 +61,6 @@ function ini(n: string) { return n.trim().charAt(0).toUpperCase() }
 
 type CartItem = { id: string; name: string; price: number; emoji: string }
 type GuestSession = { guest_name: string; cart: CartItem[] }
-type OrderRecord = { items: Array<CartItem & { guest: string }>; total: number; submittedAt: string }
 type Toast = { id: number; message: string; emoji: string; color: string }
 
 export default function CustomerPage({ params: paramsPromise }: { params: Promise<{ slug: string; tableId: string }> }) {
@@ -61,17 +68,14 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
   const tableNum = parseInt(tableId)
 
   const [menu, setMenu] = useState<MenuCategoryDoc[]>(DEFAULT_MENU)
-  const [screen, setScreen] = useState<'name'|'menu'|'cart'|'success'>('name')
+  const [screen, setScreen] = useState<'name'|'menu'>('name')
   const [currentUser, setCurrentUser] = useState('')
   const [nameInput, setNameInput] = useState('')
   const [sessions, setSessions] = useState<GuestSession[]>([])
   const [activeCat, setActiveCat] = useState(DEFAULT_MENU[0].id)
-  const [cartTab, setCartTab] = useState<'cart'|'split'>('cart')
   const [showWaiterModal, setShowWaiterModal] = useState(false)
-  const [showRemoveModal, setShowRemoveModal] = useState<string|null>(null)
   const [showLeaveModal, setShowLeaveModal] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [lastOrder, setLastOrder] = useState<OrderRecord | null>(null)
   const [search, setSearch] = useState('')
   const [showSearch, setShowSearch] = useState(false)
   const [expandedItem, setExpandedItem] = useState<string|null>(null)
@@ -79,6 +83,12 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
   const [toasts, setToasts] = useState<Toast[]>([])
   const [waiterSent, setWaiterSent] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  // Cart popup
+  const [cartOpen, setCartOpen] = useState(false)
+  // Sent batches: items already sent to kitchen (stay visible)
+  const [sentBatches, setSentBatches] = useState<SentBatch[]>([])
+  // Checkout modal
+  const [showCheckout, setShowCheckout] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
   const catRefs = useRef<Record<string, HTMLDivElement|null>>({})
   const toastId = useRef(0)
@@ -168,6 +178,7 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
     await deleteTableSession(slug, tableNum, currentUser)
     setSessions(prev => prev.filter(s => s.guest_name !== currentUser))
     setCurrentUser(''); setNameInput(''); setShowLeaveModal(false); setScreen('name')
+    setSentBatches([]); setCartOpen(false); setShowCheckout(false)
   }
 
   const callWaiter = async () => {
@@ -185,19 +196,37 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
     }
   }
 
-  const submitOrder = async () => {
-    const activeGuests = sessions.filter(s => s.cart.length > 0)
-    if (!activeGuests.length || submitting) return
+  // Send only MY current cart to kitchen; items stay visible as a "sent batch"
+  const sendToKitchen = async () => {
+    if (!myCart.length || submitting) return
     setSubmitting(true)
     try {
-      const items = activeGuests.flatMap(s => s.cart.map(item => ({ ...item, guest: s.guest_name })))
-      const total = items.reduce((s, i) => s + i.price, 0)
-      const orderRecord: OrderRecord = { items, total, submittedAt: new Date().toISOString() }
-      setLastOrder(orderRecord)
-      await createOrder(slug, tableNum, items, total)
-      await Promise.all(activeGuests.map(s => upsertTableSession(slug, tableNum, s.guest_name, [])))
-      setSessions(prev => prev.map(s => ({...s, cart: []})))
-      setScreen('success')
+      // Build grouped items for the batch display
+      const grouped: Record<string, CartItem & { qty: number }> = {}
+      myCart.forEach(item => {
+        if (!grouped[item.id]) grouped[item.id] = { ...item, qty: 0 }
+        grouped[item.id].qty++
+      })
+      const groupedItems = Object.values(grouped)
+      const batchTotal = myCart.reduce((s, i) => s + i.price, 0)
+
+      // Create order in DB
+      const orderItems = myCart.map(item => ({ ...item, guest: currentUser }))
+      await createOrder(slug, tableNum, orderItems, batchTotal)
+
+      // Clear cart in DB
+      await upsertTableSession(slug, tableNum, currentUser, [])
+      setSessions(prev => prev.map(s => s.guest_name === currentUser ? { ...s, cart: [] } : s))
+
+      // Add to local sent batches (stays in popup)
+      const batch: SentBatch = {
+        id: Date.now().toString(),
+        items: groupedItems,
+        total: batchTotal,
+        sentAt: new Date().toISOString(),
+      }
+      setSentBatches(prev => [...prev, batch])
+      showToast('Замовлення на кухні! 🍳', '✅', '#3A7D58')
     } catch (e) {
       console.error('order failed', e)
       showToast('Помилка відправки. Спробуйте ще раз.', '❌', '#C0392B')
@@ -205,6 +234,10 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
       setSubmitting(false)
     }
   }
+
+  // Total of everything sent so far + current cart
+  const totalSent = sentBatches.reduce((s, b) => s + b.total, 0)
+  const grandTotal = totalSent + myCartTotal
 
   const scrollToCategory = (catId: string) => {
     setActiveCat(catId)
@@ -232,10 +265,12 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
         body { font-family: 'DM Sans', sans-serif; }
         ::-webkit-scrollbar { display: none; }
         * { -webkit-tap-highlight-color: transparent; }
+        @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+        .slide-up { animation: slideUp 0.3s cubic-bezier(0.32, 0.72, 0, 1); }
       `}</style>
 
       {/* TOASTS */}
-      <div className="fixed top-4 left-0 right-0 z-[100] flex flex-col items-center gap-2 px-4 pointer-events-none">
+      <div className="fixed top-4 left-0 right-0 z-[200] flex flex-col items-center gap-2 px-4 pointer-events-none">
         {toasts.map(t => (
           <div key={t.id} style={{background: t.color}}
             className="flex items-center gap-2 px-4 py-3 rounded-2xl shadow-xl text-white font-semibold text-sm max-w-sm w-full">
@@ -432,16 +467,19 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
           )}
 
           <div className="fixed bottom-0 left-0 right-0 z-50 px-4 pb-5 pt-2 bg-gradient-to-t from-[#FAF8F5] via-[#FAF8F5]/95 to-transparent">
-            <button onClick={() => { if (myCartCount > 0) { setCartTab('cart'); setScreen('cart') } }}
-              className={`w-full h-14 rounded-2xl flex items-center justify-between px-5 transition-all duration-200 ${myCartCount > 0 ? `bg-[#1C1A18] text-white shadow-xl ${cartBump ? 'scale-105' : ''}` : 'bg-[#E8E0D4] text-[#9A9490]'}`}>
+            <button onClick={() => setCartOpen(true)}
+              className={`w-full h-14 rounded-2xl flex items-center justify-between px-5 transition-all duration-200 ${(myCartCount > 0 || sentBatches.length > 0) ? `bg-[#1C1A18] text-white shadow-xl ${cartBump ? 'scale-105' : ''}` : 'bg-[#E8E0D4] text-[#9A9490]'}`}>
               <div className="flex items-center gap-2">
                 <span className="text-lg">🛒</span>
-                <span className="font-semibold">{myCartCount > 0 ? `${myCartCount} ${myCartCount === 1 ? 'страва' : myCartCount < 5 ? 'страви' : 'страв'}` : 'Кошик порожній'}</span>
+                <span className="font-semibold">
+                  {myCartCount > 0 ? `${myCartCount} ${myCartCount === 1 ? 'страва' : myCartCount < 5 ? 'страви' : 'страв'}` : sentBatches.length > 0 ? 'Мої замовлення' : 'Кошик порожній'}
+                </span>
               </div>
-              {myCartCount > 0 && (
+              {(myCartCount > 0 || sentBatches.length > 0) && (
                 <div className="flex items-center gap-2">
-                  <span className="font-bold text-[#C17F3B]">{myCartTotal} ₴</span>
-                  <span className="bg-[#C17F3B] text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center">{myCartCount}</span>
+                  {myCartCount > 0 && <span className="font-bold text-[#C17F3B]">{myCartTotal} ₴</span>}
+                  {sentBatches.length > 0 && <span className="bg-[#3A7D58] text-white text-xs font-bold px-2 py-0.5 rounded-full">{sentBatches.length} ✓</span>}
+                  {myCartCount > 0 && <span className="bg-[#C17F3B] text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center">{myCartCount}</span>}
                 </div>
               )}
             </button>
@@ -449,191 +487,175 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
         </div>
       )}
 
-      {/* CART SCREEN */}
-      {screen === 'cart' && (
-        <div className="flex flex-col min-h-screen">
-          <div className="sticky top-0 z-40 bg-white border-b border-[#E8E0D4] px-4 py-3 flex items-center gap-3">
-            <button onClick={() => setScreen('menu')} className="w-9 h-9 rounded-xl bg-[#F5F3EF] border border-[#E8E0D4] flex items-center justify-center text-lg">←</button>
-            <span style={{fontFamily:'Playfair Display,serif'}} className="text-lg font-bold flex-1">Замовлення</span>
-            <button onClick={() => setShowWaiterModal(true)} disabled={waiterSent}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border ${waiterSent ? 'bg-[#E6F4ED] text-[#3A7D58] border-[#B8DEC9]' : 'bg-[#FDECEA] text-[#C0392B] border-[#F5C6C2]'}`}>
-              {waiterSent ? '✅ Викликано' : '🔔 Офіціант'}
-            </button>
-          </div>
-          <div className="flex gap-2 p-4 pb-0">
-            <button onClick={() => setCartTab('cart')} className={`flex-1 py-2.5 rounded-xl text-sm font-semibold ${cartTab==='cart' ? 'bg-[#1C1A18] text-white' : 'bg-white border border-[#E8E0D4] text-[#6B6560]'}`}>🛒 Кошик</button>
-            <button onClick={() => setCartTab('split')} className={`flex-1 py-2.5 rounded-xl text-sm font-semibold ${cartTab==='split' ? 'bg-[#1C1A18] text-white' : 'bg-white border border-[#E8E0D4] text-[#6B6560]'}`}>💳 Розрахунок</button>
-          </div>
-          <div className="flex-1 p-4 overflow-y-auto pb-36">
-            {cartTab === 'cart' && (() => {
-              const activeGuests = sessions.filter(s => s.cart.length > 0)
-              if (!activeGuests.length) return (
-                <div className="text-center py-16 text-[#9A9490]">
-                  <div className="text-6xl mb-4">🛒</div>
-                  <p className="font-semibold mb-1">Кошик порожній</p>
-                  <button onClick={() => setScreen('menu')} className="mt-5 px-6 py-3 bg-[#C17F3B] text-white rounded-xl font-semibold text-sm">← Меню</button>
-                </div>
-              )
-              let allTotal = 0
-              return (
-                <>
-                  {activeGuests.map(session => {
-                    const isMe = session.guest_name === currentUser
-                    const c = gColor(session.guest_name)
-                    const grouped: Record<string, CartItem & {qty:number}> = {}
-                    session.cart.forEach(item => { if (!grouped[item.id]) grouped[item.id] = {...item, qty:0}; grouped[item.id].qty++ })
-                    const gTotal = Object.values(grouped).reduce((s,i) => s + i.price*i.qty, 0)
-                    allTotal += gTotal
-                    return (
-                      <div key={session.guest_name} className="mb-4 bg-white border border-[#E8E0D4] rounded-2xl overflow-hidden">
-                        <div className="flex items-center gap-2.5 px-4 py-3 border-b border-[#F0EAE2] bg-[#FAF8F5]">
-                          <div style={{background:c.bg,color:c.fg}} className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold">{ini(session.guest_name)}</div>
-                          <span className="font-semibold text-sm flex-1">{session.guest_name}{isMe?' (ви)':''}</span>
-                          <span className="font-bold text-[#C17F3B]">{gTotal} ₴</span>
-                          {isMe
-                            ? <button onClick={() => setShowLeaveModal(true)} className="text-xs text-[#C0392B] bg-[#FDECEA] px-2 py-1 rounded-lg ml-1">🚪</button>
-                            : <button onClick={() => setShowRemoveModal(session.guest_name)} className="text-xs text-[#C0392B] bg-[#FDECEA] px-2 py-1 rounded-lg ml-1">✕</button>
-                          }
+      {/* CART POPUP DRAWER */}
+      {cartOpen && (
+        <div className="fixed inset-0 z-[150]">
+          {/* Backdrop */}
+          <div className="absolute inset-0 bg-black/50" onClick={() => setCartOpen(false)} />
+          {/* Drawer */}
+          <div className="slide-up absolute bottom-0 left-0 right-0 bg-white rounded-t-3xl max-h-[85vh] flex flex-col">
+            {/* Handle */}
+            <div className="flex items-center justify-between px-5 pt-4 pb-3 border-b border-[#E8E0D4]">
+              <div>
+                <div className="w-10 h-1 bg-[#E8E0D4] rounded-full mx-auto mb-3" />
+                <span style={{fontFamily:'Playfair Display,serif'}} className="text-lg font-bold">Мої замовлення</span>
+              </div>
+              <button onClick={() => setCartOpen(false)} className="w-8 h-8 rounded-full bg-[#F5F3EF] flex items-center justify-center text-[#6B6560]">✕</button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+
+              {/* CURRENT CART — items not yet sent */}
+              {myCartCount > 0 && (() => {
+                const grouped: Record<string, CartItem & {qty:number}> = {}
+                myCart.forEach(item => { if (!grouped[item.id]) grouped[item.id] = {...item, qty:0}; grouped[item.id].qty++ })
+                return (
+                  <div className="bg-[#FFFDF9] border-2 border-[#C17F3B] rounded-2xl overflow-hidden">
+                    <div className="px-4 py-2.5 bg-[#FBF0E0] flex items-center gap-2">
+                      <span className="text-sm">🛒</span>
+                      <span className="font-semibold text-sm text-[#9A6328]">Ще не відправлено</span>
+                      <span className="ml-auto font-bold text-[#C17F3B]">{myCartTotal} ₴</span>
+                    </div>
+                    <div className="px-4 py-2">
+                      {Object.values(grouped).map(item => (
+                        <div key={item.id} className="flex items-center gap-3 py-2.5 border-b border-[#F5F3EF] last:border-0">
+                          <span className="text-xl shrink-0">{item.emoji}</span>
+                          <div className="flex-1"><div className="font-medium text-sm">{item.name}</div><div className="text-xs text-[#9A9490]">{item.price} ₴</div></div>
+                          <div className="flex items-center gap-1.5">
+                            <button onClick={() => changeQty(item.id, -1)} className="w-7 h-7 rounded-lg bg-[#F5F3EF] border border-[#E8E0D4] flex items-center justify-center font-bold text-sm">−</button>
+                            <span className="w-5 text-center font-bold text-sm">{item.qty}</span>
+                            <button onClick={() => changeQty(item.id, 1)} className="w-7 h-7 rounded-lg bg-[#C17F3B] text-white flex items-center justify-center font-bold text-sm">+</button>
+                          </div>
+                          <span className="text-sm font-semibold text-[#C17F3B] ml-1">{item.price * item.qty} ₴</span>
                         </div>
-                        <div className="px-4 py-2">
-                          {Object.values(grouped).map(item => {
-                            const lt = item.price*item.qty
-                            return (
-                              <div key={item.id} className="flex items-center gap-3 py-2.5 border-b border-[#F5F3EF] last:border-0">
-                                <span className="text-xl shrink-0">{item.emoji}</span>
-                                <div className="flex-1"><div className="font-medium text-sm">{item.name}</div><div className="text-xs text-[#9A9490]">{item.price} ₴ × {item.qty}</div></div>
-                                <div className="flex items-center gap-2 shrink-0">
-                                  {isMe && (
-                                    <div className="flex items-center gap-1">
-                                      <button onClick={() => changeQty(item.id,-1)} className="w-6 h-6 rounded-lg bg-[#F5F3EF] border border-[#E8E0D4] flex items-center justify-center text-sm font-bold">−</button>
-                                      <span className="w-4 text-center text-sm font-bold">{item.qty}</span>
-                                      <button onClick={() => changeQty(item.id,1)} className="w-6 h-6 rounded-lg bg-[#F5F3EF] border border-[#E8E0D4] flex items-center justify-center text-sm font-bold">+</button>
-                                    </div>
-                                  )}
-                                  <span className="font-semibold text-sm text-[#C17F3B]">{lt} ₴</span>
-                                </div>
-                              </div>
-                            )
-                          })}
-                        </div>
-                      </div>
-                    )
-                  })}
-                  <div className="bg-[#1C1A18] rounded-2xl p-4 mb-2">
-                    <div className="flex justify-between items-center">
-                      <span className="text-white/70 text-sm">Разом по столу №{tableId}</span>
-                      <span style={{fontFamily:'Playfair Display,serif'}} className="text-2xl font-bold text-white">{allTotal} <span className="text-[#C17F3B]">₴</span></span>
+                      ))}
                     </div>
                   </div>
-                </>
-              )
-            })()}
-            {cartTab === 'split' && (() => {
-              const activeGuests = sessions.filter(s => s.cart.length > 0)
-              if (!activeGuests.length) return <div className="text-center py-16 text-[#9A9490]"><div className="text-6xl mb-4">💳</div><p className="font-semibold">Немає страв для розрахунку</p></div>
-              let grandTotal = 0
-              return (
-                <>
-                  <p className="text-sm text-[#6B6560] mb-4">Окремий рахунок для кожного:</p>
-                  {activeGuests.map(session => {
-                    const c = gColor(session.guest_name)
-                    const isMe = session.guest_name === currentUser
-                    const grouped: Record<string, CartItem & {qty:number}> = {}
-                    session.cart.forEach(i => { if (!grouped[i.id]) grouped[i.id] = {...i, qty:0}; grouped[i.id].qty++ })
-                    const gTotal = Object.values(grouped).reduce((s,i) => s + i.price*i.qty, 0)
-                    grandTotal += gTotal
-                    return (
-                      <div key={session.guest_name} className="bg-white border border-[#E8E0D4] rounded-2xl overflow-hidden mb-3">
-                        <div className="flex items-center gap-2.5 px-4 py-3 bg-[#FAF8F5] border-b border-[#F0EAE2]">
-                          <div style={{background:c.bg,color:c.fg}} className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold">{ini(session.guest_name)}</div>
-                          <span className="font-semibold flex-1">{session.guest_name}{isMe?' (ви)':''}</span>
-                          <span style={{fontFamily:'Playfair Display,serif'}} className="text-xl font-bold text-[#C17F3B]">{gTotal} ₴</span>
-                        </div>
-                        <div className="px-4 py-2">
-                          {Object.values(grouped).map(item => (
-                            <div key={item.id} className="flex justify-between items-center py-2 border-b border-[#F5F3EF] last:border-0 text-sm">
-                              <span>{item.emoji} {item.name}{item.qty>1?` ×${item.qty}`:''}</span>
-                              <span className="font-medium text-[#6B6560]">{item.price*item.qty} ₴</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )
-                  })}
-                  <div className="bg-[#F5F3EF] rounded-2xl p-4">
-                    <div className="flex justify-between font-bold text-lg"><span>Загальний рахунок</span><span className="text-[#C17F3B]">{grandTotal} ₴</span></div>
+                )
+              })()}
+
+              {/* SENT BATCHES — already on kitchen, stays visible */}
+              {sentBatches.map((batch, bIdx) => (
+                <div key={batch.id} className="bg-[#F6FBF8] border border-[#B8DEC9] rounded-2xl overflow-hidden">
+                  <div className="px-4 py-2.5 bg-[#E6F4ED] flex items-center gap-2">
+                    <span className="text-sm">✅</span>
+                    <span className="font-semibold text-sm text-[#3A7D58]">Відправлено на кухню</span>
+                    <span className="text-xs text-[#3A7D58]/60 ml-1">{new Date(batch.sentAt).toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'})}</span>
+                    <span className="ml-auto font-bold text-[#3A7D58]">{batch.total} ₴</span>
                   </div>
-                </>
-              )
-            })()}
-          </div>
-          {sessions.some(s => s.cart.length > 0) && (
-            <div className="fixed bottom-0 left-0 right-0 z-50 px-4 pb-5 pt-2 bg-gradient-to-t from-[#FAF8F5] via-[#FAF8F5]/95 to-transparent">
-              <button onClick={submitOrder} disabled={submitting}
-                className="w-full h-14 bg-[#3A7D58] hover:bg-[#2d6444] text-white font-bold rounded-2xl text-base shadow-xl disabled:opacity-60">
-                {submitting ? 'Відправляємо...' : '✅ Відправити замовлення на кухню'}
-              </button>
+                  <div className="px-4 py-2">
+                    {batch.items.map(item => (
+                      <div key={`${batch.id}-${item.id}`} className="flex items-center gap-3 py-2 border-b border-[#E6F4ED] last:border-0">
+                        <span className="text-lg shrink-0">{item.emoji}</span>
+                        <div className="flex-1"><div className="text-sm text-[#3A7D58]">{item.name}{item.qty > 1 ? ` ×${item.qty}` : ''}</div></div>
+                        <span className="text-sm font-medium text-[#3A7D58]">{item.price * item.qty} ₴</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+
+              {/* Empty state */}
+              {myCartCount === 0 && sentBatches.length === 0 && (
+                <div className="text-center py-12 text-[#9A9490]">
+                  <div className="text-5xl mb-3">🛒</div>
+                  <p className="font-medium">Тут з'являться ваші страви</p>
+                  <button onClick={() => setCartOpen(false)} className="mt-4 px-5 py-2.5 bg-[#C17F3B] text-white rounded-xl text-sm font-semibold">← Меню</button>
+                </div>
+              )}
             </div>
-          )}
+
+            {/* Footer actions */}
+            <div className="px-4 pb-6 pt-3 border-t border-[#E8E0D4] space-y-2.5">
+              {/* Grand total */}
+              {(myCartCount > 0 || sentBatches.length > 0) && (
+                <div className="flex justify-between items-center px-1 mb-1">
+                  <span className="text-sm text-[#6B6560]">
+                    {sentBatches.length > 0 ? 'Всього замовлено' : 'До відправки'}
+                  </span>
+                  <span className="font-bold text-[#1C1A18]">{grandTotal} ₴</span>
+                </div>
+              )}
+              {/* Send to kitchen */}
+              {myCartCount > 0 && (
+                <button onClick={sendToKitchen} disabled={submitting}
+                  className="w-full h-13 py-3.5 bg-[#3A7D58] hover:bg-[#2d6444] text-white font-bold rounded-2xl text-base shadow-lg disabled:opacity-60">
+                  {submitting ? 'Відправляємо...' : `🍳 Відправити на кухню · ${myCartTotal} ₴`}
+                </button>
+              )}
+              {/* Checkout — only show if something has been sent */}
+              {sentBatches.length > 0 && (
+                <button onClick={() => { setCartOpen(false); setShowCheckout(true) }}
+                  className="w-full py-3.5 border-2 border-[#1C1A18] text-[#1C1A18] font-bold rounded-2xl text-sm">
+                  💳 Оплатити та вийти · {grandTotal} ₴
+                </button>
+              )}
+              {/* Leave if nothing ordered */}
+              {myCartCount === 0 && sentBatches.length === 0 && (
+                <button onClick={() => { setCartOpen(false); setShowLeaveModal(true) }}
+                  className="w-full py-3 border border-[#E8E0D4] text-[#9A9490] font-semibold rounded-2xl text-sm">
+                  🚪 Покинути стіл
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
-      {/* SUCCESS SCREEN */}
-      {screen === 'success' && (
-        <div className="min-h-screen bg-[#FAF8F5] flex flex-col">
-          <div className="bg-white border-b border-[#E8E0D4] px-4 py-3 flex items-center gap-3 sticky top-0 z-40">
-            <button onClick={() => setScreen('menu')} className="w-9 h-9 rounded-xl bg-[#F5F3EF] border border-[#E8E0D4] flex items-center justify-center text-lg">←</button>
-            <div style={{fontFamily:'Playfair Display,serif'}} className="text-lg font-bold flex-1">Ваш рахунок</div>
-            <div className="bg-[#E6F4ED] text-[#3A7D58] rounded-full px-3 py-1 text-xs font-semibold">✅ Прийнято кухнею</div>
-          </div>
-          <div className="flex-1 px-4 py-5 max-w-md mx-auto w-full">
-            <div className="bg-[#E6F4ED] border border-[#B8DEC9] rounded-2xl p-5 mb-5 text-center">
-              <div className="text-4xl mb-2">🎉</div>
-              <div style={{fontFamily:'Playfair Display,serif'}} className="text-xl font-bold text-[#2E7D54] mb-1">Замовлення на кухні!</div>
-              <p className="text-[#3A7D58] text-sm">Стіл №{tableId} · Очікуйте, зараз принесемо</p>
-            </div>
-            {lastOrder && (
-              <div className="bg-white border border-[#E8E0D4] rounded-2xl overflow-hidden mb-5">
-                <div className="px-5 py-3.5 border-b border-[#F0EAE2] flex justify-between items-center bg-[#FAF8F5]">
-                  <span style={{fontFamily:'Playfair Display,serif'}} className="font-bold text-lg">Деталі замовлення</span>
-                  <span className="text-xs text-[#9A9490]">{new Date(lastOrder.submittedAt).toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'})}</span>
-                </div>
-                {(() => {
-                  const byGuest: Record<string, Array<CartItem & {guest:string}>> = {}
-                  lastOrder.items.forEach(item => { if (!byGuest[item.guest]) byGuest[item.guest]=[]; byGuest[item.guest].push(item) })
-                  return Object.entries(byGuest).map(([guest, items]) => {
-                    const grouped: Record<string, CartItem & {qty:number}> = {}
-                    items.forEach(i => { if (!grouped[i.id]) grouped[i.id]={...i,qty:0}; grouped[i.id].qty++ })
-                    const gTotal = Object.values(grouped).reduce((s,i) => s+i.price*i.qty, 0)
-                    const c = gColor(guest)
-                    return (
-                      <div key={guest} className="px-5 py-3 border-b border-[#F9F5F0] last:border-0">
-                        <div className="flex items-center gap-2 mb-2">
-                          <div style={{background:c.bg,color:c.fg}} className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold">{ini(guest)}</div>
-                          <span className="text-sm font-semibold flex-1">{guest}{guest===currentUser?' (ви)':''}</span>
-                          <span className="font-bold text-[#C17F3B] text-sm">{gTotal} ₴</span>
-                        </div>
-                        {Object.values(grouped).map(item => (
-                          <div key={item.id} className="flex justify-between text-sm py-1 text-[#6B6560]">
-                            <span>{item.emoji} {item.name}{item.qty>1?` ×${item.qty}`:''}</span>
-                            <span className="font-medium">{item.price*item.qty} ₴</span>
-                          </div>
-                        ))}
-                      </div>
-                    )
-                  })
-                })()}
-                <div className="px-5 py-4 bg-[#1C1A18] flex justify-between items-center">
-                  <span className="text-white/70 text-sm font-medium">Разом до сплати</span>
-                  <span style={{fontFamily:'Playfair Display,serif'}} className="text-2xl font-bold text-[#C17F3B]">{lastOrder.total} ₴</span>
-                </div>
+      {/* CHECKOUT MODAL */}
+      {showCheckout && (
+        <div className="fixed inset-0 z-[160]">
+          <div className="absolute inset-0 bg-black/60" onClick={() => setShowCheckout(false)} />
+          <div className="slide-up absolute bottom-0 left-0 right-0 bg-white rounded-t-3xl max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between px-5 pt-4 pb-3 border-b border-[#E8E0D4]">
+              <div>
+                <div className="w-10 h-1 bg-[#E8E0D4] rounded-full mx-auto mb-3" />
+                <span style={{fontFamily:'Playfair Display,serif'}} className="text-xl font-bold">Ваш рахунок</span>
               </div>
-            )}
-            <div className="space-y-3">
-              <button onClick={() => setScreen('menu')} className="w-full py-3.5 bg-[#C17F3B] text-white font-bold rounded-2xl">+ Додати ще страви</button>
+              <button onClick={() => setShowCheckout(false)} className="w-8 h-8 rounded-full bg-[#F5F3EF] flex items-center justify-center text-[#6B6560]">✕</button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+              <div className="bg-[#E6F4ED] border border-[#B8DEC9] rounded-2xl p-4 text-center mb-2">
+                <div className="text-3xl mb-1">🎉</div>
+                <div style={{fontFamily:'Playfair Display,serif'}} className="text-lg font-bold text-[#2E7D54]">Дякуємо! Все вже на кухні</div>
+                <p className="text-[#3A7D58] text-xs mt-1">Стіл №{tableId}</p>
+              </div>
+              {sentBatches.map((batch, i) => (
+                <div key={batch.id} className="bg-white border border-[#E8E0D4] rounded-2xl overflow-hidden">
+                  <div className="px-4 py-2.5 bg-[#FAF8F5] border-b border-[#F0EAE2] flex items-center gap-2">
+                    <span className="text-xs text-[#9A9490]">Замовлення {i + 1} · {new Date(batch.sentAt).toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'})}</span>
+                    <span className="ml-auto font-semibold text-sm text-[#C17F3B]">{batch.total} ₴</span>
+                  </div>
+                  <div className="px-4 py-2">
+                    {batch.items.map(item => (
+                      <div key={`co-${batch.id}-${item.id}`} className="flex justify-between text-sm py-1.5 border-b border-[#F5F3EF] last:border-0">
+                        <span className="text-[#6B6560]">{item.emoji} {item.name}{item.qty > 1 ? ` ×${item.qty}` : ''}</span>
+                        <span className="font-medium">{item.price * item.qty} ₴</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              {myCartCount > 0 && (
+                <div className="bg-[#FBF0E0] border border-[#E8C88A] rounded-2xl p-3 text-sm text-[#9A6328]">
+                  ⚠️ У вас є {myCartCount} страв у кошику, які ще не відправлено на кухню.
+                </div>
+              )}
+            </div>
+            <div className="px-4 pb-8 pt-3 border-t border-[#E8E0D4]">
+              <div className="bg-[#1C1A18] rounded-2xl p-4 flex justify-between items-center mb-3">
+                <span className="text-white/70 text-sm">Разом до сплати</span>
+                <span style={{fontFamily:'Playfair Display,serif'}} className="text-2xl font-bold text-[#C17F3B]">{totalSent} ₴</span>
+              </div>
               <button onClick={() => setShowWaiterModal(true)} disabled={waiterSent}
-                className={`w-full py-3.5 font-semibold rounded-2xl border ${waiterSent ? 'bg-[#E6F4ED] text-[#3A7D58] border-[#B8DEC9]' : 'bg-[#FDECEA] text-[#C0392B] border-[#F5C6C2]'}`}>
-                {waiterSent ? '✅ Офіціанта викликано' : '🔔 Викликати офіціанта'}
+                className={`w-full py-3.5 font-bold rounded-2xl border-2 text-base mb-2 ${
+                  waiterSent ? 'bg-[#E6F4ED] text-[#3A7D58] border-[#B8DEC9]' : 'bg-[#FDECEA] text-[#C0392B] border-[#F5C6C2]'
+                }`}>
+                {waiterSent ? '✅ Офіціанта викликано' : '🔔 Викликати офіціанта для оплати'}
+              </button>
+              <button onClick={() => { setShowCheckout(false); setShowLeaveModal(true) }}
+                className="w-full py-3 text-sm text-[#9A9490] border border-[#E8E0D4] rounded-2xl">
+                🚪 Покинути стіл
               </button>
             </div>
           </div>
@@ -642,7 +664,7 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
 
       {/* MODALS */}
       {showWaiterModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-end justify-center p-4">
+        <div className="fixed inset-0 bg-black/50 z-[170] flex items-end justify-center p-4">
           <div className="bg-white rounded-3xl p-6 w-full max-w-sm text-center">
             <div className="w-10 h-1 bg-[#E8E0D4] rounded-full mx-auto mb-5" />
             <div className="text-5xl mb-3">🔔</div>
@@ -653,25 +675,13 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
           </div>
         </div>
       )}
-      {showRemoveModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-end justify-center p-4">
-          <div className="bg-white rounded-3xl p-6 w-full max-w-sm text-center">
-            <div className="w-10 h-1 bg-[#E8E0D4] rounded-full mx-auto mb-5" />
-            <div className="text-5xl mb-3">👤</div>
-            <div style={{fontFamily:'Playfair Display,serif'}} className="text-xl font-bold mb-2">Видалити «{showRemoveModal}»?</div>
-            <p className="text-[#6B6560] text-sm mb-6">Усі страви цього гостя будуть видалені.</p>
-            <button onClick={() => removeGuest(showRemoveModal)} className="w-full py-3.5 bg-[#C0392B] text-white font-bold rounded-2xl mb-2">Так, видалити</button>
-            <button onClick={() => setShowRemoveModal(null)} className="w-full py-3.5 border border-[#E8E0D4] rounded-2xl text-sm">Скасувати</button>
-          </div>
-        </div>
-      )}
       {showLeaveModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-end justify-center p-4">
+        <div className="fixed inset-0 bg-black/50 z-[170] flex items-end justify-center p-4">
           <div className="bg-white rounded-3xl p-6 w-full max-w-sm text-center">
             <div className="w-10 h-1 bg-[#E8E0D4] rounded-full mx-auto mb-5" />
             <div className="text-5xl mb-3">🚪</div>
             <div style={{fontFamily:'Playfair Display,serif'}} className="text-xl font-bold mb-2">Покинути стіл?</div>
-            <p className="text-[#6B6560] text-sm mb-6">Ваші страви будуть видалені. Замовлення інших збережеться.</p>
+            <p className="text-[#6B6560] text-sm mb-6">Ваш кошик буде очищено. Вже відправлені страви залишаться.</p>
             <button onClick={leaveTable} className="w-full py-3.5 bg-[#C0392B] text-white font-bold rounded-2xl mb-2">Так, покинути</button>
             <button onClick={() => setShowLeaveModal(false)} className="w-full py-3.5 border border-[#E8E0D4] rounded-2xl text-sm">Залишитись</button>
           </div>
