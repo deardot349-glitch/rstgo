@@ -95,18 +95,19 @@ export async function upsertTableSession(
   slug: string, tableNumber: number, guestName: string, cart: CartItem[]
 ) {
   await supabase.from('table_sessions').upsert({
-    id: `${slug}_${tableNumber}_${guestName}`,
     restaurant_slug: slug,
     table_number: tableNumber,
     guest_name: guestName,
     cart,
     updated_at: new Date().toISOString(),
-  }, { onConflict: 'id' })
+  }, { onConflict: 'restaurant_slug,table_number,guest_name' })
 }
 
 export async function deleteTableSession(slug: string, tableNumber: number, guestName: string) {
   await supabase.from('table_sessions').delete()
-    .eq('id', `${slug}_${tableNumber}_${guestName}`)
+    .eq('restaurant_slug', slug)
+    .eq('table_number', tableNumber)
+    .eq('guest_name', guestName)
 }
 
 // ── Orders ──

@@ -1,43 +1,19 @@
-import { createClient } from '@supabase/supabase-js'
-
-export const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
-
-// ─── TYPES ───────────────────────────────────────────────
+// ─── DB client via API routes (Neon PostgreSQL + Prisma under the hood) ───────
+// This file replaces the old Supabase client.
+// All DB operations go through Next.js API routes so Prisma runs server-side.
 
 export type CartItem = { id: string; name: string; price: number; emoji: string }
 
 export type TableSession = {
-  id?: string
-  restaurant_slug: string
-  table_number: number
-  guest_name: string
+  id: string
+  restaurantId: string
+  tableNumber: number
+  guestName: string
   cart: CartItem[]
-  updated_at?: string
+  updatedAt: string
 }
 
-export type OrderItem = { id: string; name: string; price: number; emoji: string; guest: string }
-
-export type OrderDoc = {
-  id: string
-  restaurant_slug: string
-  table_number: number
-  items: OrderItem[]
-  total: number
-  done: boolean
-  created_at: string
-}
-
-export type WaiterCallDoc = {
-  id: string
-  restaurant_slug: string
-  table_number: number
-  guest_name: string
-  created_at: string
-  resolved: boolean
-}
+export type OrderItem = CartItem & { guest: string }
 
 export type MenuItemDoc = {
   id: string
@@ -55,203 +31,113 @@ export type MenuCategoryDoc = {
   items: MenuItemDoc[]
 }
 
-// ─── TABLE SESSIONS ───────────────────────────────────────
+// ─── Polling helper (replaces Supabase realtime) ─────────────────────────────
+function poll(fn: () => void, intervalMs = 3000): () => void {
+  fn()
+  const id = setInterval(fn, intervalMs)
+  return () => clearInterval(id)
+}
+
+// ─── Table Sessions ───────────────────────────────────────────────────────────
 
 export function subscribeTableSessions(
   slug: string,
   tableNumber: number,
   callback: (sessions: TableSession[]) => void
 ): () => void {
-  // Initial fetch
-  const fetchSessions = async () => {
-    const { data } = await supabase
-      .from('table_sessions')
-      .select('*')
-      .eq('restaurant_slug', slug)
-      .eq('table_number', tableNumber)
-    if (data) callback(data as TableSession[])
-  }
-  fetchSessions()
-
-  // Realtime subscription
-  const channel = supabase
-    .channel(`table_sessions_${slug}_${tableNumber}`)
-    .on('postgres_changes', {
-      event: '*',
-      schema: 'public',
-      table: 'table_sessions',
-      filter: `restaurant_slug=eq.${slug}`,
-    }, () => fetchSessions())
-    .subscribe()
-
-  return () => { supabase.removeChannel(channel) }
+  return poll(async () => {
+    const res = await fetch(`/api/sessions?slug=${slug}&table=${tableNumber}`)
+    if (res.ok) {
+      const data = await res.json()
+      callback(data.map((s: any) => ({ ...s, cart: s.cart ?? [] })))
+    }
+  })
 }
 
 export async function upsertTableSession(
   slug: string, tableNumber: number, guestName: string, cart: CartItem[]
 ) {
-  await supabase.from('table_sessions').upsert({
-    restaurant_slug: slug,
-    table_number: tableNumber,
-    guest_name: guestName,
-    cart,
-    updated_at: new Date().toISOString(),
-  }, { onConflict: 'restaurant_slug,table_number,guest_name' })
+  await fetch('/api/sessions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ slug, table: tableNumber, guestName, cart }),
+  })
 }
 
 export async function deleteTableSession(slug: string, tableNumber: number, guestName: string) {
-  await supabase.from('table_sessions')
-    .delete()
-    .eq('restaurant_slug', slug)
-    .eq('table_number', tableNumber)
-    .eq('guest_name', guestName)
+  await fetch(`/api/sessions?slug=${slug}&table=${tableNumber}&guest=${encodeURIComponent(guestName)}`, {
+    method: 'DELETE',
+  })
 }
 
-// ─── ORDERS ───────────────────────────────────────────────
-
-export function subscribeOrders(
-  slug: string,
-  callback: (orders: OrderDoc[]) => void
-): () => void {
-  const fetchOrders = async () => {
-    const { data } = await supabase
-      .from('orders_rt')
-      .select('*')
-      .eq('restaurant_slug', slug)
-      .order('created_at', { ascending: false })
-    if (data) callback(data as OrderDoc[])
-  }
-  fetchOrders()
-
-  const channel = supabase
-    .channel(`orders_rt_${slug}`)
-    .on('postgres_changes', {
-      event: '*',
-      schema: 'public',
-      table: 'orders_rt',
-      filter: `restaurant_slug=eq.${slug}`,
-    }, () => fetchOrders())
-    .subscribe()
-
-  return () => { supabase.removeChannel(channel) }
-}
+// ─── Orders ───────────────────────────────────────────────────────────────────
 
 export async function createOrder(
   slug: string, tableNumber: number, items: OrderItem[], total: number
 ) {
-  const { error } = await supabase.from('orders_rt').insert({
-    restaurant_slug: slug,
-    table_number: tableNumber,
-    items,
-    total,
-    done: false,
+  const res = await fetch('/api/orders', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ slug, table: tableNumber, items, total }),
   })
-  if (error) throw error
+  if (!res.ok) throw new Error('Failed to create order')
 }
 
-export async function markOrderDone(orderId: string) {
-  await supabase.from('orders_rt').update({ done: true }).eq('id', orderId)
-}
-
-// ─── WAITER CALLS ─────────────────────────────────────────
-
-export function subscribeWaiterCalls(
-  slug: string,
-  callback: (calls: WaiterCallDoc[]) => void
-): () => void {
-  const fetchCalls = async () => {
-    const { data } = await supabase
-      .from('waiter_calls_rt')
-      .select('*')
-      .eq('restaurant_slug', slug)
-      .eq('resolved', false)
-      .order('created_at', { ascending: false })
-    if (data) callback(data as WaiterCallDoc[])
-  }
-  fetchCalls()
-
-  const channel = supabase
-    .channel(`waiter_calls_rt_${slug}`)
-    .on('postgres_changes', {
-      event: '*',
-      schema: 'public',
-      table: 'waiter_calls_rt',
-      filter: `restaurant_slug=eq.${slug}`,
-    }, () => fetchCalls())
-    .subscribe()
-
-  return () => { supabase.removeChannel(channel) }
-}
+// ─── Waiter Calls ─────────────────────────────────────────────────────────────
 
 export async function createWaiterCall(slug: string, tableNumber: number, guestName: string) {
-  const { error } = await supabase.from('waiter_calls_rt').insert({
-    restaurant_slug: slug,
-    table_number: tableNumber,
-    guest_name: guestName,
-    resolved: false,
+  const res = await fetch('/api/waiter', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ slug, table: tableNumber, guestName }),
   })
-  if (error) throw error
+  if (!res.ok) throw new Error('Failed to call waiter')
 }
 
-export async function resolveWaiterCall(callId: string) {
-  await supabase.from('waiter_calls_rt').update({ resolved: true }).eq('id', callId)
-}
-
-// ─── MENU (stored in Supabase as JSON in a restaurants table) ─────────────
+// ─── Menu ─────────────────────────────────────────────────────────────────────
 
 export function subscribeMenu(
   slug: string,
   callback: (categories: MenuCategoryDoc[]) => void
 ): () => void {
-  const fetchMenu = async () => {
-    const { data } = await supabase
-      .from('restaurants_menu')
-      .select('menu')
-      .eq('slug', slug)
-      .single()
-    if (data?.menu) callback(data.menu as MenuCategoryDoc[])
-    else callback([])
-  }
-  fetchMenu()
-
-  const channel = supabase
-    .channel(`menu_${slug}`)
-    .on('postgres_changes', {
-      event: '*',
-      schema: 'public',
-      table: 'restaurants_menu',
-      filter: `slug=eq.${slug}`,
-    }, () => fetchMenu())
-    .subscribe()
-
-  return () => { supabase.removeChannel(channel) }
+  return poll(async () => {
+    const res = await fetch(`/api/menu?slug=${slug}`)
+    if (res.ok) {
+      const data = await res.json()
+      if (data && data.length > 0) {
+        // Normalize: DB stores `description`, UI uses `desc`
+        const normalized = data.map((cat: any) => ({
+          ...cat,
+          items: cat.items.map((item: any) => ({
+            ...item,
+            desc: item.description ?? item.desc ?? '',
+          })),
+        }))
+        callback(normalized)
+      }
+    }
+  }, 5000) // menu changes less often, poll every 5s
 }
 
 export async function saveMenu(slug: string, categories: MenuCategoryDoc[]) {
-  await supabase.from('restaurants_menu').upsert({
-    slug,
-    menu: categories,
-    updated_at: new Date().toISOString(),
-  }, { onConflict: 'slug' })
+  const res = await fetch('/api/menu', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ slug, categories }),
+  })
+  if (!res.ok) throw new Error('Failed to save menu')
 }
 
-// ─── STORAGE (photos) ─────────────────────────────────────
-
-export async function uploadMenuItemImage(restaurantId: string, file: File): Promise<string> {
-  const ext = file.name.split('.').pop()
-  const fileName = `${restaurantId}/menu/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
-  const { error } = await supabase.storage
-    .from('restaurant-images')
-    .upload(fileName, file, { upsert: true })
-  if (error) throw error
-  const { data } = supabase.storage.from('restaurant-images').getPublicUrl(fileName)
-  return data.publicUrl
+// ─── Image upload (uses Cloudinary from flower12's setup) ────────────────────
+export async function uploadMenuItemImage(_restaurantId: string, file: File): Promise<string> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch('/api/upload', { method: 'POST', body: form })
+  if (!res.ok) throw new Error('Upload failed')
+  const { url } = await res.json()
+  return url
 }
 
-export async function deleteMenuItemImage(url: string): Promise<void> {
-  try {
-    const path = url.split('/restaurant-images/')[1]
-    if (!path) return
-    await supabase.storage.from('restaurant-images').remove([path])
-  } catch { }
+export async function deleteMenuItemImage(_url: string): Promise<void> {
+  // No-op for now; images stay in Cloudinary
 }

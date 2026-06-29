@@ -1,0 +1,110 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Restaurant (one per slug) ────────────────────────────────────────────────
+model Restaurant {
+  id           String   @id @default(cuid())
+  slug         String   @unique
+  name         String
+  description  String?
+  logoUrl      String?
+  currency     String   @default("UAH")
+  tableCount   Int      @default(5)
+  staffPin     String
+  primaryColor String   @default("#C17F3B")
+  address      String?
+  phone        String?
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  menuCategories MenuCategory[]
+  tableSessions  TableSession[]
+  orders         Order[]
+  waiterCalls    WaiterCall[]
+
+  @@index([slug])
+}
+
+// ─── Menu ─────────────────────────────────────────────────────────────────────
+model MenuCategory {
+  id           String     @id @default(cuid())
+  restaurantId String
+  name         String
+  emoji        String     @default("🍽")
+  sortOrder    Int        @default(0)
+  createdAt    DateTime   @default(now())
+
+  restaurant   Restaurant  @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  items        MenuItem[]
+
+  @@index([restaurantId, sortOrder])
+}
+
+model MenuItem {
+  id          String       @id @default(cuid())
+  categoryId  String
+  name        String
+  description String?
+  price       Float
+  available   Boolean      @default(true)
+  imageUrl    String?
+  sortOrder   Int          @default(0)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  category    MenuCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@index([categoryId, available])
+}
+
+// ─── Table Sessions (live cart per guest per table) ───────────────────────────
+model TableSession {
+  id           String     @id @default(cuid())
+  restaurantId String
+  tableNumber  Int
+  guestName    String
+  cart         Json       @default("[]")
+  updatedAt    DateTime   @updatedAt
+
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@unique([restaurantId, tableNumber, guestName])
+  @@index([restaurantId, tableNumber])
+}
+
+// ─── Orders ───────────────────────────────────────────────────────────────────
+model Order {
+  id           String     @id @default(cuid())
+  restaurantId String
+  tableNumber  Int
+  items        Json       @default("[]")
+  total        Float      @default(0)
+  done         Boolean    @default(false)
+  createdAt    DateTime   @default(now())
+
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId, done])
+  @@index([restaurantId, tableNumber])
+}
+
+// ─── Waiter Calls ─────────────────────────────────────────────────────────────
+model WaiterCall {
+  id           String     @id @default(cuid())
+  restaurantId String
+  tableNumber  Int
+  guestName    String
+  resolved     Boolean    @default(false)
+  createdAt    DateTime   @default(now())
+
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId, resolved])
+}
