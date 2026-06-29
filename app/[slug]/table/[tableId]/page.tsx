@@ -168,12 +168,6 @@ export default function CustomerPage({ params: paramsPromise }: { params: Promis
     await saveCart(newCart)
   }
 
-  const removeGuest = async (name: string) => {
-    await deleteTableSession(slug, tableNum, name)
-    setSessions(prev => prev.filter(s => s.guest_name !== name))
-    setShowRemoveModal(null)
-  }
-
   const leaveTable = async () => {
     await deleteTableSession(slug, tableNum, currentUser)
     setSessions(prev => prev.filter(s => s.guest_name !== currentUser))
