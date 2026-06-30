@@ -9,6 +9,7 @@ export type TableSession = {
   restaurantId: string
   tableNumber: number
   guestName: string
+  guest_name: string
   cart: CartItem[]
   updatedAt: string
 }
@@ -66,7 +67,11 @@ export function subscribeTableSessions(
     const res = await fetch(`/api/sessions?slug=${slug}&table=${tableNumber}`)
     if (res.ok) {
       const data = await res.json()
-      callback(data.map((s: any) => ({ ...s, cart: s.cart ?? [] })))
+      callback(data.map((s: any) => ({
+        ...s,
+        guest_name: s.guestName,
+        cart: s.cart ?? [],
+      })))
     }
   })
 }
