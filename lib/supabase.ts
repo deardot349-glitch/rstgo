@@ -31,6 +31,23 @@ export type MenuCategoryDoc = {
   items: MenuItemDoc[]
 }
 
+export type OrderDoc = {
+  id: string
+  table_number: number
+  items: OrderItem[]
+  total: number
+  done: boolean
+  created_at: string
+}
+
+export type WaiterCallDoc = {
+  id: string
+  table_number: number
+  guest_name: string
+  resolved: boolean
+  created_at: string
+}
+
 // ─── Polling helper (replaces Supabase realtime) ─────────────────────────────
 function poll(fn: () => void, intervalMs = 3000): () => void {
   fn()
@@ -83,6 +100,34 @@ export async function createOrder(
   if (!res.ok) throw new Error('Failed to create order')
 }
 
+export function subscribeOrders(
+  slug: string,
+  callback: (orders: OrderDoc[]) => void
+): () => void {
+  return poll(async () => {
+    const res = await fetch(`/api/orders?slug=${slug}`)
+    if (res.ok) {
+      const data = await res.json()
+      callback(data.map((o: any) => ({
+        id: o.id,
+        table_number: o.tableNumber,
+        items: o.items,
+        total: o.total,
+        done: o.done,
+        created_at: o.createdAt,
+      })))
+    }
+  })
+}
+
+export async function markOrderDone(orderId: string) {
+  await fetch('/api/orders', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: orderId }),
+  })
+}
+
 // ─── Waiter Calls ─────────────────────────────────────────────────────────────
 
 export async function createWaiterCall(slug: string, tableNumber: number, guestName: string) {
@@ -92,6 +137,33 @@ export async function createWaiterCall(slug: string, tableNumber: number, guestN
     body: JSON.stringify({ slug, table: tableNumber, guestName }),
   })
   if (!res.ok) throw new Error('Failed to call waiter')
+}
+
+export function subscribeWaiterCalls(
+  slug: string,
+  callback: (calls: WaiterCallDoc[]) => void
+): () => void {
+  return poll(async () => {
+    const res = await fetch(`/api/waiter?slug=${slug}`)
+    if (res.ok) {
+      const data = await res.json()
+      callback(data.map((c: any) => ({
+        id: c.id,
+        table_number: c.tableNumber,
+        guest_name: c.guestName,
+        resolved: c.resolved,
+        created_at: c.createdAt,
+      })))
+    }
+  })
+}
+
+export async function resolveWaiterCall(callId: string) {
+  await fetch('/api/waiter', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: callId }),
+  })
 }
 
 // ─── Menu ─────────────────────────────────────────────────────────────────────
